@@ -1,56 +1,53 @@
-# GitHub Actions CI/CD & APK Release Guide
+# GitHub Actions CI/CD & Dual-Channel Release Guide
 
 > **Repository:** `nozelrosario/private-ai-agent`  
 > **Workflow File:** [android-release.yml](file:///sdcard/Projects/nozelrosario/private-ai-agent/.github/workflows/android-release.yml)
 
 ---
 
-## 1. Current State of the GitHub Workflow
+## 1. Dual-Channel Release Pipeline (Beta & Stable)
 
-The workflow file `.github/workflows/android-release.yml` is configured to build Android APK packages automatically.
+PrivateAgent employs a dual-channel release pipeline using Android product flavors (`stable` vs `beta`), allowing side-by-side coexistence on the same device and safe testing of work-in-progress features without disrupting production users.
 
-### Trigger Conditions
-- **Manual Trigger (`workflow_dispatch`)**: Can be manually triggered from the GitHub repository **Actions** tab.
-- **Git Tag Push (`push: tags: - "v*"`)**: Automatically triggers when any tag starting with `v` (e.g., `v1.0.3`, `v2.0.0`) is pushed to GitHub.
-
-### Build Pipeline Steps
-1. Checks out repository source code (`actions/checkout@v4`).
-2. Configures Java 17 Temurin distribution (`actions/setup-java@v4`).
-3. Sets up Flutter stable channel with caching (`subosito/flutter-action@v2`).
-4. Runs `flutter pub get` and executes unit tests (`flutter test`).
-5. Compiles:
-   - **Universal Release APK**: `flutter build apk --release` &rarr; `dist/app-universal-release.apk`
-   - **Architecture-Specific Split APKs**: `flutter build apk --release --split-per-abi`
-     - `dist/app-arm64-v8a-release.apk` (modern 64-bit ARM smartphones)
-     - `dist/app-armeabi-v7a-release.apk` (older 32-bit ARM devices)
-     - `dist/app-x86_64-release.apk` (Android emulators and x86 devices)
-6. Computes cryptographic checksums: `sha256sum *.apk > SHA256SUMS.txt`.
-7. Uploads the build folder as a GitHub Actions workflow artifact named `private-agent-android`.
+| Channel | Trigger Branch / Condition | Flavor | Package ID (`applicationId`) | App Label | GitHub Distribution Target |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Stable** | `main` branch (push tag `v*` or manual run) | `stable` | `com.orailnoor.privateagent` | `PrivateAgent` | Official GitHub Release (Latest) + Actions Artifact |
+| **Beta** | `develop` branch (push) or manual run on any branch | `beta` | `com.orailnoor.privateagent.beta` | `PrivateAgent Beta` | GitHub **Pre-release** (`v*-beta.*`) + Actions Artifact |
 
 ---
 
-## 2. Why GitHub Releases Are NOT Automatically Created Right Now
+## 2. Triggering Builds
 
-In commit `ce84a4710ffecea0ab1b3d9a1c16ae5d7794b199` (*"ci: keep release uploads manually signed"*), the original upstream author made two breaking changes:
-1. Changed `permissions: contents: write` down to `permissions: contents: read`.
-2. **Removed** the GitHub Release publication step:
-   ```yaml
-   - name: Attach APKs to GitHub release
-     if: startsWith(github.ref, 'refs/tags/')
-     uses: softprops/action-gh-release@v2
-     with:
-       files: dist/*
-   ```
+### Automatic Triggers:
+1. **Stable Production Release:**
+   - Tag commit on `main` and push: `git tag v1.0.X && git push origin v1.0.X`.
+   - The CI builds the `stable` flavor and attaches APKs to an official public release.
+2. **Beta Pre-release:**
+   - Push to `develop`: `git push origin develop`.
+   - The CI builds the `beta` flavor with diagonal "BETA" launcher icons, in-app "BETA" badge, and uploads to GitHub Pre-releases + workflow artifacts.
 
-### Consequences
-- Pushing a new version tag (e.g., `v1.0.3`) builds the APKs on GitHub's Ubuntu runners, but **no GitHub Release is created** on the Releases page.
-- The compiled APKs are stored only as temporary workflow run artifacts, which:
-  - Expire after 90 days.
-  - Require the user to be logged in to GitHub and download a `.zip` file containing the APKs.
+### Manual Triggers (`workflow_dispatch`):
+You can trigger a build from **any branch** (including feature branches):
+1. Navigate to the **Actions** tab on GitHub &rarr; select **Android Release & Beta Pipeline**.
+2. Click **Run workflow**.
+3. Select your desired branch (e.g., `develop`, `feature/xyz`, or `main`).
+4. Select the **Release Channel** dropdown (`beta` or `stable`).
+5. Choose whether to publish as a GitHub Pre-release (default: `true`).
+6. Click **Run workflow**.
 
 ---
 
-## 3. Step-by-Step Setup for Your Forked Repository
+## 3. Side-by-Side Android Coexistence
+
+Because the `beta` flavor uses `applicationIdSuffix = ".beta"`:
+- Both apps can be installed on the same phone simultaneously without overwriting each other.
+- The Beta version has a dedicated diagonal "BETA" banner across launcher icons (`android/app/src/beta/res/mipmap-*`).
+- Shizuku provider authority automatically isolates to `com.orailnoor.privateagent.beta.shizuku`.
+- Accessibility service label is isolated to `PrivateAgent Beta Screen Control`.
+
+---
+
+## 4. Forked Repository GitHub Configuration
 
 Because this repository was forked to `git@github.com:nozelrosario/private-ai-agent.git`, follow these steps to configure automated releases:
 

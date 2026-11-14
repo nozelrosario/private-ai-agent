@@ -19,6 +19,7 @@ import '../services/custom_skill_service.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../main.dart';
 import '../config/feature_flags.dart';
+import '../config/flavor_config.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -489,30 +490,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ? const Color(0xFF0C0A15)
           : const Color(0xFFFFFFFF),
       appBar: AppBar(
-        title: RichText(
-          text: TextSpan(
-            style: TextStyle(
-              fontSize: 20,
-              color: isDark ? Colors.white : const Color(0xFF1E293B),
-            ),
-            children: [
-              TextSpan(
-                text: 'Private',
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RichText(
+              text: TextSpan(
                 style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: Theme.of(context).colorScheme.primary,
-                  letterSpacing: -0.5,
+                  fontSize: 20,
+                  color: isDark ? Colors.white : const Color(0xFF1E293B),
                 ),
+                children: [
+                  TextSpan(
+                    text: 'Private',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: Theme.of(context).colorScheme.primary,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  const TextSpan(
+                    text: 'Agent',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w400,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ],
               ),
-              const TextSpan(
-                text: 'Agent',
-                style: TextStyle(
-                  fontWeight: FontWeight.w400,
-                  letterSpacing: -0.5,
+            ),
+            if (FlavorConfig.isBeta) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.orange.withOpacity(0.6), width: 1),
+                ),
+                child: const Text(
+                  'BETA',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ),
             ],
-          ),
+          ],
         ),
         backgroundColor: Colors.transparent,
         scrolledUnderElevation: 0,
@@ -751,7 +777,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   size: 26,
                 ),
                 const SizedBox(width: 12),
-                Text('PrivateAgent', style: headerStyle),
+                Text(FlavorConfig.appName, style: headerStyle),
+                if (FlavorConfig.isBeta) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.orange.withOpacity(0.6), width: 1),
+                    ),
+                    child: const Text(
+                      'BETA',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

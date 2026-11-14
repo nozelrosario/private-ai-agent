@@ -15,6 +15,7 @@ import 'services/shizuku_service.dart';
 import 'services/chat_history_service.dart';
 import 'models/chat_message.dart';
 import 'widgets/message_bubble.dart';
+import 'config/flavor_config.dart';
 
 class OverlayApp extends StatefulWidget {
   const OverlayApp({super.key});
@@ -122,9 +123,9 @@ class _OverlayAppState extends State<OverlayApp> {
 
   Future<void> _initializeServices() async {
     // 1. Send registration broadcast first so native MethodChannels are active
-    final intent = const AndroidIntent(
-      action: 'com.orailnoor.privateagent.REGISTER_BACKGROUND_CHANNELS',
-      package: 'com.orailnoor.privateagent',
+    final intent = AndroidIntent(
+      action: '${FlavorConfig.packageName}.REGISTER_BACKGROUND_CHANNELS',
+      package: FlavorConfig.packageName,
     );
     try {
       await intent.sendBroadcast();
@@ -331,12 +332,12 @@ class _OverlayAppState extends State<OverlayApp> {
       });
     }
     await _overlayHistoryWrite;
-    const intent = AndroidIntent(
+    final intent = AndroidIntent(
       action: 'android.intent.action.MAIN',
       category: 'android.intent.category.LAUNCHER',
-      package: 'com.orailnoor.privateagent',
-      componentName: 'com.orailnoor.privateagent.MainActivity',
-      flags: <int>[
+      package: FlavorConfig.packageName,
+      componentName: '${FlavorConfig.packageName}.MainActivity',
+      flags: const <int>[
         Flag.FLAG_ACTIVITY_NEW_TASK,
         Flag.FLAG_ACTIVITY_REORDER_TO_FRONT,
       ],

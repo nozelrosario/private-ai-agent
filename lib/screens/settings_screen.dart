@@ -18,6 +18,7 @@ import 'persona_editor_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../config/feature_flags.dart';
+import '../config/flavor_config.dart';
 
 class SettingsScreen extends StatefulWidget {
   final AiService aiService;
@@ -865,8 +866,10 @@ class _SettingsScreenState extends State<SettingsScreen>
           // 9. About / Links Card
           _buildSettingsCard(
             icon: Icons.info_outline_rounded,
-            title: 'About PrivateAgent',
-            subtitle: 'Resources and repository access',
+            title: 'About ${FlavorConfig.appName}',
+            subtitle: FlavorConfig.isBeta
+                ? 'Beta Channel • Pre-release testing build'
+                : 'Resources and repository access',
             isDark: isDark,
             children: [
               ListTile(

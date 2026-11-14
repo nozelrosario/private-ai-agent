@@ -19,7 +19,7 @@ import java.io.ByteArrayOutputStream
 
 class AgentAccessibilityService : AccessibilityService() {
 
-    private val ownPackageName = "com.orailnoor.privateagent"
+    private val ownPackageName get() = packageName ?: "com.orailnoor.privateagent"
 
     companion object {
         var instance: AgentAccessibilityService? = null
@@ -40,7 +40,7 @@ class AgentAccessibilityService : AccessibilityService() {
         val listener = eventListener ?: return
         
         // Filter out events from our own app so we don't record the Stop Overlay button clicks
-        if (event.packageName?.toString() == "com.orailnoor.privateagent") return
+        if (event.packageName?.toString() == ownPackageName) return
         
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {

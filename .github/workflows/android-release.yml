@@ -1,10 +1,26 @@
-name: Android release
+name: Android Release & Beta Pipeline
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
+    branches:
+      - develop
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release Channel"
+        required: true
+        default: "beta"
+        type: choice
+        options:
+          - beta
+          - stable
+      prerelease:
+        description: "Publish as GitHub Pre-release"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -14,6 +30,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Channel and Flavor
+        id: channel_info
+        run: |
+          # 1. Determine Channel and Pre-release flag
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANNEL="${{ inputs.channel }}"
+            IS_PRERELEASE="${{ inputs.prerelease }}"
+          elif [[ "${{ github.ref }}" =~ ^refs/tags/v.*-beta ]]; then
+            CHANNEL="beta"
+            IS_PRERELEASE="true"
+          elif [[ "${{ github.ref }}" =~ ^refs/tags/v ]]; then
+            CHANNEL="stable"
+            IS_PRERELEASE="false"
+          elif [ "${{ github.ref_name }}" = "develop" ]; then
+            CHANNEL="beta"
+            IS_PRERELEASE="true"
+          else
+            CHANNEL="beta"
+            IS_PRERELEASE="true"
+          fi
+
+          # 2. Extract base version from pubspec.yaml
+          BASE_VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d ' ')
+
+          if [ "$CHANNEL" = "beta" ]; then
+            FLAVOR="beta"
+            ARTIFACT_NAME="private-agent-android-beta"
+            if [[ "${{ github.ref }}" =~ ^refs/tags/ ]]; then
+              RELEASE_TAG="${{ github.ref_name }}"
+            else
+              RELEASE_TAG="v${BASE_VERSION}-beta.${{ github.run_number }}"
+            fi
+            RELEASE_TITLE="PrivateAgent Beta (${RELEASE_TAG})"
+          else
+            FLAVOR="stable"
+            ARTIFACT_NAME="private-agent-android-stable"
+            if [[ "${{ github.ref }}" =~ ^refs/tags/ ]]; then
+              RELEASE_TAG="${{ github.ref_name }}"
+            else
+              RELEASE_TAG="v${BASE_VERSION}"
+            fi
+            RELEASE_TITLE="PrivateAgent Stable (${RELEASE_TAG})"
+          fi
+
+          echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+          echo "flavor=$FLAVOR" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+
+          echo "::notice ::Building Channel: $CHANNEL (Flavor: $FLAVOR, Tag: $RELEASE_TAG, Prerelease: $IS_PRERELEASE)"
 
       - uses: actions/setup-java@v4
         with:
@@ -33,27 +104,37 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --verbose --android-skip-build-dependency-validation
+          FLAVOR="${{ steps.channel_info.outputs.flavor }}"
+          flutter build apk --flavor "$FLAVOR" --release --verbose --android-skip-build-dependency-validation
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk dist/app-universal-release.apk
+          # Copy universal apk
+          find build/app/outputs/flutter-apk/ -maxdepth 1 -name "*release.apk" ! -name "*arm*" ! -name "*x86*" -exec cp {} "dist/app-${FLAVOR}-universal-release.apk" \;
+          if [ ! -f "dist/app-${FLAVOR}-universal-release.apk" ]; then
+            cp build/app/outputs/flutter-apk/*.apk dist/ || true
+          fi
 
       - name: Build architecture-specific APKs
         run: |
-          flutter build apk --release --split-per-abi --verbose --android-skip-build-dependency-validation
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/
-          cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/
+          FLAVOR="${{ steps.channel_info.outputs.flavor }}"
+          flutter build apk --flavor "$FLAVOR" --release --split-per-abi --verbose --android-skip-build-dependency-validation
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            find build/app/outputs/flutter-apk/ -name "*${abi}*release.apk" -exec cp {} "dist/app-${FLAVOR}-${abi}-release.apk" \;
+          done
           cd dist
           sha256sum *.apk > SHA256SUMS.txt
+          ls -la
 
       - uses: actions/upload-artifact@v4
         with:
-          name: private-agent-android
+          name: ${{ steps.channel_info.outputs.artifact_name }}
           path: dist/*
 
-      - name: Attach APKs to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref_name == 'develop' || (github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.channel_info.outputs.release_tag }}
+          name: ${{ steps.channel_info.outputs.release_title }}
+          prerelease: ${{ steps.channel_info.outputs.is_prerelease == 'true' }}
           files: dist/*
           generate_release_notes: true

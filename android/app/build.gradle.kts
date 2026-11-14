@@ -24,6 +24,25 @@ extensions.configure<ApplicationExtension> {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["appLabel"] = "PrivateAgent"
+        manifestPlaceholders["accessibilityLabel"] = "PrivateAgent Screen Control"
+    }
+
+    flavorDimensions += "default"
+
+    productFlavors {
+        create("stable") {
+            dimension = "default"
+            applicationId = "com.orailnoor.privateagent"
+            manifestPlaceholders["appLabel"] = "PrivateAgent"
+            manifestPlaceholders["accessibilityLabel"] = "PrivateAgent Screen Control"
+        }
+        create("beta") {
+            dimension = "default"
+            applicationIdSuffix = ".beta"
+            manifestPlaceholders["appLabel"] = "PrivateAgent Beta"
+            manifestPlaceholders["accessibilityLabel"] = "PrivateAgent Beta Screen Control"
+        }
     }
 
     buildTypes {
