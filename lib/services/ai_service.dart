@@ -258,7 +258,7 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $_apiKey',
-              'HTTP-Referer': 'https://github.com/orailnoor/private-agent',
+              'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
               'X-Title': 'PrivateAgent',
             },
             body: requestBody,
@@ -357,7 +357,7 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
       request.headers.addAll({
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $_apiKey',
-        'HTTP-Referer': 'https://github.com/orailnoor/private-agent',
+        'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
         'X-Title': 'PrivateAgent',
       });
 
@@ -500,7 +500,7 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer $_apiKey',
-                'HTTP-Referer': 'https://github.com/orailnoor/private-agent',
+                'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
                 'X-Title': 'PrivateAgent',
               },
               body: jsonEncode({

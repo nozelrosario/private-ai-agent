@@ -836,7 +836,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 leading: const Icon(Icons.code_rounded),
                 onTap: () {
                   launchUrl(
-                    Uri.parse('https://github.com/orailnoor/private-agent'),
+                    Uri.parse('https://github.com/nozelrosario/private-ai-agent'),
                     mode: LaunchMode.externalApplication,
                   );
                 },

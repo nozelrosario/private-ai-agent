@@ -21,7 +21,7 @@ The system operates on a continuous feedback loop:
 
 ## Installation
 
-Download the latest APK directly from the [Releases Page](https://github.com/orailnoor/private-agent/releases).
+Download the latest APK directly from the [Releases Page](https://github.com/nozelrosario/private-ai-agent/releases).
 
 Choose `app-universal-release.apk` when it is available. It supports ARM64,
 32-bit ARM, and x86_64 devices in one package. If a release only provides split
@@ -30,6 +30,13 @@ APKs, most modern Android phones—including Snapdragon devices—must use
 
 PrivateAgent supports Android 8.0 (API 26) and newer. Current release builds are
 also checked for Android 15/16's 16 KB native-library alignment requirement.
+
+## Knowledge Base & Documentation
+
+For comprehensive technical documentation, architectural diagrams, file breakdown, and release setup guides:
+- [Master Technical Knowledge Base](file:///sdcard/Projects/nozelrosario/private-ai-agent/KNOWLEDGE_BASE.md)
+- [Architecture & Workflow Diagrams](file:///sdcard/Projects/nozelrosario/private-ai-agent/docs/ARCHITECTURE_DIAGRAMS.md)
+- [CI/CD & APK Release Guide](file:///sdcard/Projects/nozelrosario/private-ai-agent/docs/CI_CD_RELEASE_GUIDE.md)
 
 ## Setup Instructions (How to use for FREE)
 
