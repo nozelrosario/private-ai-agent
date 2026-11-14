@@ -3,9 +3,6 @@ allprojects {
         google()
         mavenCentral()
     }
-    tasks.matching { it.name.contains("check") && it.name.contains("AarMetadata") }.configureEach {
-        enabled = false
-    }
 }
 
 val newBuildDir: Directory =
@@ -26,23 +23,31 @@ subprojects {
     val configureSubproject: (Project) -> Unit = { proj ->
         val android = proj.extensions.findByName("android")
         if (android != null) {
-            try {
-                val getCompileSdk = android.javaClass.methods.find { it.name == "getCompileSdk" && it.parameterCount == 0 }
-                val currentSdk = getCompileSdk?.invoke(android) as? Int
-                if (currentSdk == null || currentSdk < 35) {
-                    val setCompileSdk = android.javaClass.methods.find { it.name == "setCompileSdk" && it.parameterCount == 1 }
-                    setCompileSdk?.invoke(android, 35)
+            for (m in android.javaClass.methods) {
+                if (m.name == "setCompileSdk" && m.parameterCount == 1) {
+                    try { m.invoke(android, 35) } catch (_: Throwable) {}
                 }
-            } catch (_: Throwable) {}
-            try {
-                val setCompileSdkVersion = android.javaClass.methods.find { it.name == "setCompileSdkVersion" && it.parameterCount == 1 }
-                if (setCompileSdkVersion != null) {
-                    val pType = setCompileSdkVersion.parameterTypes[0]
-                    if (pType == Int::class.javaPrimitiveType || pType == java.lang.Integer::class.java) {
-                        setCompileSdkVersion.invoke(android, 35)
-                    }
+                if (m.name == "compileSdkVersion" && m.parameterCount == 1) {
+                    try {
+                        val pType = m.parameterTypes[0]
+                        if (pType == Int::class.javaPrimitiveType || pType == java.lang.Integer::class.java) {
+                            m.invoke(android, 35)
+                        } else if (pType == String::class.java) {
+                            m.invoke(android, "android-35")
+                        }
+                    } catch (_: Throwable) {}
                 }
-            } catch (_: Throwable) {}
+                if (m.name == "setCompileSdkVersion" && m.parameterCount == 1) {
+                    try {
+                        val pType = m.parameterTypes[0]
+                        if (pType == Int::class.javaPrimitiveType || pType == java.lang.Integer::class.java) {
+                            m.invoke(android, 35)
+                        } else if (pType == String::class.java) {
+                            m.invoke(android, "android-35")
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
         }
     }
 
