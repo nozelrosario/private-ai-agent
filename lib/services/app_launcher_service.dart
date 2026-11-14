@@ -7,7 +7,7 @@ class AppLauncherService {
 
   /// Get all installed apps (cached), including system apps!
   Future<List<AppInfo>> getInstalledApps() async {
-    _cachedApps ??= await InstalledApps.getInstalledApps(false, false);
+    _cachedApps ??= await InstalledApps.getInstalledApps(excludeSystemApps: false, withIcon: false);
     return _cachedApps!;
   }
 
