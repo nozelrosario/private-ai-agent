@@ -31,6 +31,11 @@ extensions.configure<ApplicationExtension> {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 flutter {

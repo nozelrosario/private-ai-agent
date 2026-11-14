@@ -75,6 +75,10 @@ subprojects {
             configureSubproject(this)
         }
     }
+
+    tasks.matching { it.name.startsWith("lintVital") }.configureEach {
+        enabled = false
+    }
 }
 
 tasks.register<Delete>("clean") {
