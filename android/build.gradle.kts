@@ -3,6 +3,9 @@ allprojects {
         google()
         mavenCentral()
     }
+    tasks.matching { it.name.contains("check") && it.name.contains("AarMetadata") }.configureEach {
+        enabled = false
+    }
 }
 
 val newBuildDir: Directory =
@@ -20,8 +23,8 @@ subprojects {
 }
 
 subprojects {
-    afterEvaluate {
-        val android = project.extensions.findByName("android")
+    val configureSubproject: (Project) -> Unit = { proj ->
+        val android = proj.extensions.findByName("android")
         if (android != null) {
             try {
                 val getCompileSdk = android.javaClass.methods.find { it.name == "getCompileSdk" && it.parameterCount == 0 }
@@ -43,8 +46,12 @@ subprojects {
         }
     }
 
-    tasks.matching { it.name.contains("check") && it.name.contains("AarMetadata") }.configureEach {
-        enabled = false
+    if (project.state.executed) {
+        configureSubproject(project)
+    } else {
+        project.afterEvaluate {
+            configureSubproject(this)
+        }
     }
 }
 
