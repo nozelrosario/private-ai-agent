@@ -348,4 +348,51 @@ class ScreenAutomationService {
       return null;
     }
   }
+
+  /// Lock device screen (requires Android 9+)
+  Future<bool> lockScreen() async {
+    try {
+      return await _channel.invokeMethod<bool>('lockScreen') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if device Keyguard (lockscreen) is currently engaged
+  Future<bool> isKeyguardLocked() async {
+    try {
+      return await _channel.invokeMethod<bool>('isKeyguardLocked') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if the display is currently turned on/interactive
+  Future<bool> isScreenInteractive() async {
+    try {
+      return await _channel.invokeMethod<bool>('isScreenInteractive') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if the user has touched or scrolled the screen recently
+  Future<bool> isUserInteracting({int windowMs = 30000}) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+              'isUserInteracting', {'windowMs': windowMs}) ??
+          false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Turn on the screen from sleep
+  Future<bool> wakeScreen() async {
+    try {
+      return await _channel.invokeMethod<bool>('wakeScreen') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
 }

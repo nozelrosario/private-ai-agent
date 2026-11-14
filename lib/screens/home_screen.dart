@@ -16,6 +16,12 @@ import 'task_history_screen.dart';
 import 'skills_personas_screen.dart';
 import '../services/persona_service.dart';
 import '../services/custom_skill_service.dart';
+import '../services/routine_service.dart';
+import '../services/routine_ledger_service.dart';
+import '../services/routine_scheduler_service.dart';
+import '../services/task_executor.dart';
+import '../services/screen_automation_service.dart';
+import '../services/app_launcher_service.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../main.dart';
 import '../config/feature_flags.dart';
@@ -66,10 +72,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _aiService.init();
     await CustomSkillService().init();
     await PersonaService().init();
+    await RoutineService().init();
+    await RoutineLedgerService().init();
     await _notificationService.requestPermission();
     await _voiceService.init();
     await _telegramService.init();
     await _actionHandler.shizuku.checkAvailability();
+
+    await RoutineSchedulerService().init(
+      onExecuteRoutine: (routine, {wasLockedInitially = false}) async {
+        final executor = TaskExecutor(
+          aiService: _aiService,
+          screenService: ScreenAutomationService(),
+          appLauncher: AppLauncherService(),
+          shizukuService: _actionHandler.shizuku,
+          onProgress: (msg) {
+            _reportProgress(msg);
+          },
+          onConfirmationRequired: (prompt) async {
+            if (_telegramService.isEnabled) {
+              return await _telegramService.requestConfirmation(prompt);
+            }
+            return true;
+          },
+        );
+        return await executor.executeAutonomousRoutine(
+          routine,
+          wasLockedInitially: wasLockedInitially,
+        );
+      },
+      onCancelExecution: () {
+        _taskExecutor?.cancel();
+      },
+    );
 
     if (mounted) {
       setState(() {});
@@ -596,6 +631,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
               // Active Persona Selector Chips
               _buildPersonaSelectorBar(isDark),
+
+              // Active Routines Banner
+              _buildActiveRoutinesBanner(isDark),
 
               // API key warning banner
               if (!_aiService.isConfigured)
@@ -1185,6 +1223,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildActiveRoutinesBanner(bool isDark) {
+    return ValueListenableBuilder<int>(
+      valueListenable: RoutineService().routinesChangedNotifier,
+      builder: (context, _, __) {
+        final activeRoutines = RoutineService().getActiveRoutines();
+        if (activeRoutines.isEmpty) return const SizedBox.shrink();
+
+        final first = activeRoutines.first;
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.repeat_rounded, size: 16, color: Colors.indigo),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${activeRoutines.length} Active Routine${activeRoutines.length > 1 ? "s" : ""}: ${first.name}',
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w500),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const SkillsPersonasScreen(initialTabIndex: 2),
+                    ),
+                  ).then((_) => setState(() {}));
+                },
+                child: const Text(
+                  'Manage',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.indigo,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

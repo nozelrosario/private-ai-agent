@@ -1,6 +1,9 @@
 package com.orailnoor.privateagent
 
+import android.content.Context
 import android.content.Intent
+import android.app.KeyguardManager
+import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -45,9 +48,12 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        var channelSink: MethodChannel? = null
+
         fun registerAccessibilityChannel(flutterEngine: FlutterEngine, context: android.content.Context) {
-            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
-                .setMethodCallHandler { call, result ->
+            val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
+            channelSink = channel
+            channel.setMethodCallHandler { call, result ->
                     android.util.Log.d("PrivateAgentKotlin", "Received method call: ${call.method}")
                     when (call.method) {
                         "ping" -> result.success(true)
@@ -223,6 +229,80 @@ class MainActivity : FlutterActivity() {
                             } else {
                                 result.success(service.getCurrentPackage())
                             }
+                        }
+
+                        "scheduleRoutineAlarm" -> {
+                            val routineId = call.argument<String>("routineId") ?: ""
+                            val delaySeconds = (call.argument<Number>("delaySeconds")?.toLong()) ?: 1800L
+                            MacroAlarmScheduler.scheduleRoutineAlarm(context, routineId, delaySeconds)
+                            result.success(true)
+                        }
+
+                        "cancelRoutineAlarm" -> {
+                            val routineId = call.argument<String>("routineId") ?: ""
+                            MacroAlarmScheduler.cancelRoutineAlarm(context, routineId)
+                            result.success(true)
+                        }
+
+                        "startRoutineForegroundService" -> {
+                            val title = call.argument<String>("title") ?: "Running Routine"
+                            MacroForegroundService.start(context, title)
+                            result.success(true)
+                        }
+
+                        "stopRoutineForegroundService" -> {
+                            MacroForegroundService.stop(context)
+                            MacroWakeReceiver.releaseWakeLock()
+                            result.success(true)
+                        }
+
+                        "lockScreen" -> {
+                            val service = AgentAccessibilityService.instance
+                            if (service == null) {
+                                result.error("SERVICE_NOT_RUNNING", "Accessibility service is not running", null)
+                            } else {
+                                result.success(service.lockScreen())
+                            }
+                        }
+
+                        "isKeyguardLocked" -> {
+                            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                            result.success(km?.isKeyguardLocked ?: false)
+                        }
+
+                        "isScreenInteractive" -> {
+                            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                            result.success(pm?.isInteractive ?: false)
+                        }
+
+                        "isUserInteracting" -> {
+                            val windowMs = (call.argument<Number>("windowMs")?.toLong()) ?: 30000L
+                            result.success(AgentAccessibilityService.isUserActivelyInteracting(windowMs))
+                        }
+
+                        "wakeScreen" -> {
+                            try {
+                                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                                @Suppress("DEPRECATION")
+                                val wakeLock = pm?.newWakeLock(
+                                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                                    "PrivateAgent:WakeScreen"
+                                )
+                                wakeLock?.acquire(3000L)
+                                result.success(true)
+                            } catch (e: Exception) {
+                                result.error("WAKE_FAILED", e.message, null)
+                            }
+                        }
+
+                        "acquireWakeLock" -> {
+                            MacroWakeReceiver.acquireWakeLock(context)
+                            result.success(true)
+                        }
+
+                        "releaseWakeLock" -> {
+                            MacroWakeReceiver.releaseWakeLock()
+                            result.success(true)
                         }
 
                         else -> result.notImplemented()

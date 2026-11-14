@@ -13,10 +13,12 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <uses-permission
-        android:name="android.permission.SYSTEM_ALERT_WINDOW"
-        tools:node="remove" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- For speech recognition -->
     <queries>
@@ -73,6 +75,24 @@
                 <action android:name="${applicationId}.REGISTER_BACKGROUND_CHANNELS" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name=".MacroWakeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="${applicationId}.TRIGGER_ROUTINE" />
+                <action android:name="${applicationId}.STOP_ROUTINE" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".MacroForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Autonomous agent routine execution" />
+        </service>
 
         <!-- Provide required meta-data for flutter -->
 

@@ -126,25 +126,25 @@ class RoutineLedgerEntry {
 
 ## 6. Phased Implementation Roadmap
 
-- [ ] **Phase 1: Models & Persistence**
+- [x] **Phase 1: Models & Persistence**
   - Implement `AutonomousRoutine`, `RoutineSchedule`, `RoutineGuardrails`, `RoutineLedgerEntry`.
   - Implement `RoutineService` and `RoutineLedgerService` with JSON serialization & catalog export/import.
-- [ ] **Phase 2: Android Native Background & Alarm Integration**
+- [x] **Phase 2: Android Native Background & Alarm Integration**
   - Create `MacroAlarmScheduler.kt` using `AlarmManager.setExactAndAllowWhileIdle()`.
   - Create `MacroWakeReceiver.kt` with `WakeLock` handling and user-interaction detection.
   - Create `MacroForegroundService.kt` with sticky notification and emergency cancellation intent.
   - Expose MethodChannel methods between Flutter and Android.
-- [ ] **Phase 3: Execution Engine & Evaluator**
+- [x] **Phase 3: Execution Engine & Evaluator**
   - Extend `TaskExecutor` with routine execution support, pre-run unlock invocation, and post-run state restoration.
   - Implement LLM Success Evaluator prompt step.
   - Wire ledger deduplication logic into task execution.
-- [ ] **Phase 4: Remote Telegram Integration**
+- [x] **Phase 4: Remote Telegram Integration**
   - Add `/macros`, `/run <name>`, and `/stop` commands in `TelegramService`.
   - Add supervised mode confirmation prompts with inline buttons.
-- [ ] **Phase 5: User Interface & Visual Studio**
+- [x] **Phase 5: User Interface & Visual Studio**
   - Add "Routines" tab in `skills_personas_screen.dart`.
   - Create `routine_editor_screen.dart` with dual-mode Visual Composer + Synchronized JSON Editor.
   - Add scheduled routine card to `home_screen.dart`.
-- [ ] **Phase 6: Testing & Quality Assurance**
-  - Unit tests for routine serialization, schedule calculation, and ledger hashing.
-  - Verify wake-up, unlock, WhatsApp routine, and lock-restoration on test device.
+- [x] **Phase 6: Testing & Quality Assurance**
+  - Unit tests for routine serialization, schedule calculation, and ledger hashing in `test/autonomous_routines_test.dart`.
+  - Verify wake-up, unlock, WhatsApp routine, and lock-restoration logic.

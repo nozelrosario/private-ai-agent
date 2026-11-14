@@ -12,6 +12,10 @@ import 'recovery_engine.dart';
 import 'skill_router_service.dart';
 import '../models/saved_skill.dart';
 import '../models/custom_skill.dart';
+import '../models/autonomous_routine.dart';
+import 'persona_service.dart';
+import 'routine_ledger_service.dart';
+import 'custom_skill_service.dart';
 
 /// Executes multi-step UI automation tasks using LLM-guided screen reading.
 ///
@@ -937,5 +941,307 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
     }
 
     return null;
+  }
+
+  /// Evaluates whether the screen state satisfies the routine's success criteria
+  Future<bool> _evaluateSuccessCriteria({
+    required String goal,
+    required String criteria,
+    required String screenContent,
+    required String lastAction,
+  }) async {
+    const evalSystemPrompt = '''
+You are an autonomous agent task evaluation auditor.
+You are given a TASK GOAL, the SUCCESS CRITERIA, the LAST ACTION executed, and the CURRENT SCREEN DUMP.
+Evaluate whether the success criteria has been completely fulfilled.
+
+Respond with ONLY a JSON object:
+{
+  "criteria_met": true,
+  "reasoning": "brief 1-sentence evaluation"
+}
+''';
+
+    final prompt = '''
+TASK GOAL: $goal
+SUCCESS CRITERIA: $criteria
+LAST ACTION TAKEN: $lastAction
+
+CURRENT SCREEN:
+$screenContent
+
+Has the success criteria been completely met?
+''';
+
+    try {
+      final res = await _aiService.sendTaskMessage(evalSystemPrompt, prompt);
+      final jsonStr = _extractJson(res.content);
+      final decoded = jsonDecode(jsonStr);
+      return decoded['criteria_met'] == true;
+    } catch (e) {
+      developer.log('Success criteria evaluation error: $e',
+          name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Executes an AutonomousRoutine with iterative screen evaluation, bounded guardrails,
+  /// ledger deduplication, and optional supervised confirmation.
+  Future<String> executeAutonomousRoutine(
+    AutonomousRoutine routine, {
+    bool wasLockedInitially = false,
+  }) async {
+    _cancelled = false;
+    final List<String> results = [];
+    int totalTokens = 0;
+    _report('Starting autonomous routine: "${routine.name}"...');
+
+    // 1. If screen was locked initially, attempt unlock routine
+    if (wasLockedInitially && routine.unlockSkillId != null) {
+      _report(
+          'Screen was locked. Attempting unlock skill: ${routine.unlockSkillId}...');
+      final unlockSkill =
+          CustomSkillService().getSkillById(routine.unlockSkillId!);
+      if (unlockSkill != null && unlockSkill.steps.isNotEmpty) {
+        for (final step in unlockSkill.steps) {
+          if (_cancelled) break;
+          if (step.actionTypeHint == 'click_text' &&
+              step.expectedElementHint != null) {
+            await _screenService.clickByText(step.expectedElementHint!);
+          } else if (step.actionTypeHint == 'swipe') {
+            await _screenService.swipe(540, 1800, 540, 400);
+          }
+          await Future.delayed(const Duration(milliseconds: 1000));
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 1500));
+      final stillLocked = await _screenService.isKeyguardLocked();
+      if (stillLocked) {
+        final msg =
+            'Failed: Screen remained locked after unlock skill execution.';
+        _report(msg);
+        return msg;
+      }
+    }
+
+    // 2. Resolve Persona system prompt modifier
+    final allPersonas = PersonaService().getAllPersonas();
+    final persona = allPersonas.firstWhere(
+      (p) => p.id == routine.personaId,
+      orElse: () => PersonaService().getActivePersona(),
+    );
+    final personaModifier = persona.systemPromptModifier.isNotEmpty
+        ? '\nPERSONA INSTRUCTIONS (${persona.name}):\n${persona.systemPromptModifier}\n'
+        : '';
+
+    // 3. Resolve recent ledger context for anti-looping / deduplication
+    final ledgerEntries = RoutineLedgerService().getRecentEntries(
+      routineId: routine.id,
+      limit: 10,
+    );
+    String ledgerContext = '';
+    if (ledgerEntries.isNotEmpty) {
+      final buffer = StringBuffer();
+      buffer.writeln('\nRECENTLY REPLIED CONTACTS (DO NOT SEND DUPLICATES):');
+      for (final entry in ledgerEntries) {
+        buffer.writeln(
+            '- ${entry.senderIdentifier}: "${entry.messageSnippet}" -> Replied: "${entry.agentReply}" [${entry.status}]');
+      }
+      ledgerContext = buffer.toString();
+    }
+
+    final maxSteps = routine.guardrails.maxStepsPerRun;
+    String lastAction = '';
+    int sameActionCount = 0;
+    int consecutiveFailures = 0;
+
+    // If currently inside PrivateAgent app, navigate to home first
+    final currentPkg = await _screenService.getCurrentPackage();
+    if (currentPkg == 'com.orailnoor.privateagent' ||
+        currentPkg == 'com.orailnoor.privateagent.beta') {
+      _report('Moving to background...');
+      await _screenService.pressHome();
+      await Future.delayed(const Duration(milliseconds: 1500));
+    }
+
+    for (int step = 0; step < maxSteps; step++) {
+      if (_cancelled) {
+        _report('Routine cancelled by user.');
+        results.add('Routine cancelled by user.');
+        return 'Routine cancelled.';
+      }
+
+      int delay = 1200;
+      if (lastAction == 'open_app') {
+        delay = 3000;
+      } else if (lastAction == 'type_text') {
+        delay = 2000;
+      } else if (lastAction == 'click_text' || lastAction == 'click_at') {
+        delay = 1500;
+      } else if (lastAction == 'scroll') {
+        delay = 1000;
+      }
+      await Future.delayed(Duration(milliseconds: delay));
+
+      // Read screen
+      final screenContent = await _screenService.getScreenDescription();
+
+      // Check success criteria evaluation after step 1
+      if (step > 0 && lastAction.isNotEmpty) {
+        _report('Evaluating screen against success criteria...');
+        final criteriaMet = await _evaluateSuccessCriteria(
+          goal: routine.goalPrompt,
+          criteria: routine.successCriteria,
+          screenContent: screenContent,
+          lastAction: lastAction,
+        );
+
+        if (criteriaMet) {
+          _report('Success criteria met! Routine complete.');
+          results.add('Success criteria verified by evaluator.');
+          await _notificationService.showTaskCompleteNotification(
+            'Routine Complete',
+            'Routine "${routine.name}" finished successfully.',
+          );
+          await TaskHistoryLogger.logTask(
+            routine.goalPrompt,
+            'Success',
+            totalTokens,
+            step,
+            results,
+          );
+          return 'Done.';
+        }
+      }
+
+      final prevResultStr = step > 0 && results.isNotEmpty
+          ? '\nPREVIOUS ACTION RESULT: ${results.last}\n'
+          : '';
+
+      String failureHint = '';
+      if (consecutiveFailures >= 3) {
+        failureHint =
+            '\n\nWARNING: You have failed $consecutiveFailures times in a row. Try a different approach.';
+      }
+
+      final prompt = '''
+ROUTINE GOAL: ${routine.goalPrompt}
+SUCCESS CRITERIA: ${routine.successCriteria}
+$personaModifier$ledgerContext
+CURRENT SCREEN TEXT DUMP:
+$screenContent$prevResultStr$failureHint
+Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next action to make progress toward the success criteria?
+''';
+
+      String response;
+      try {
+        _cancelCompleter = Completer<void>();
+        final aiFuture = _aiService.sendTaskMessage(_taskSystemPrompt, prompt);
+        final result = await Future.any([
+          aiFuture.then((r) => r),
+          _cancelCompleter!.future.then((_) => null),
+        ]);
+
+        if (result == null || _cancelled) {
+          return 'Routine cancelled.';
+        }
+
+        final aiResponse = result as AiResponse;
+        response = aiResponse.content;
+        totalTokens += aiResponse.totalTokens;
+      } catch (e) {
+        if (_cancelled) return 'Routine cancelled.';
+        results.add('LLM Error: $e');
+        consecutiveFailures++;
+        continue;
+      }
+
+      final action = _parseAction(response);
+      if (action == null) {
+        results.add('Failed to parse AI action');
+        consecutiveFailures++;
+        continue;
+      }
+
+      if (action.action == 'done') {
+        _report('Routine signaled done.');
+        results.add('Routine completed.');
+        await TaskHistoryLogger.logTask(
+          routine.goalPrompt,
+          'Success',
+          totalTokens,
+          step + 1,
+          results,
+        );
+        return 'Done.';
+      }
+
+      // Check Supervised approval gate if typing text / sending message
+      if (action.action == 'type_text') {
+        final textToType = action.params['text'] as String? ?? '';
+        if (routine.executionMode == RoutineExecutionMode.supervised &&
+            onConfirmationRequired != null) {
+          _report('Supervised approval requested: "$textToType"');
+          final approved = await onConfirmationRequired!(
+              'Approve sending message: "$textToType"?');
+          if (!approved || _cancelled) {
+            results.add('Action rejected by user during supervised checkpoint.');
+            _report('Message skipped (rejected by user).');
+            continue;
+          }
+        }
+      }
+
+      // Execute action
+      _report(
+          'Action (${step + 1}/$maxSteps): ${action.action} ${action.params}');
+      final success = await _executeAction(action);
+
+      if (success) {
+        results.add('${action.action}: success');
+        consecutiveFailures = 0;
+
+        // Record message in ledger if typing text
+        if (action.action == 'type_text') {
+          final sentText = action.params['text'] as String? ?? '';
+          if (sentText.isNotEmpty) {
+            unawaited(RoutineLedgerService().recordEntry(
+              routineId: routine.id,
+              targetAppPackage: currentPkg ?? 'unknown',
+              senderIdentifier: 'WhatsApp Contact',
+              messageSnippet: routine.goalPrompt,
+              agentReply: sentText,
+              status: 'sent',
+            ));
+          }
+        }
+      } else {
+        results.add('${action.action}: failed');
+        consecutiveFailures++;
+      }
+
+      if (action.action == lastAction) {
+        sameActionCount++;
+        if (sameActionCount >= 3) {
+          results.add('Loop detected: repeated ${action.action} 3 times.');
+          await _screenService.pressBack();
+          sameActionCount = 0;
+        }
+      } else {
+        sameActionCount = 1;
+        lastAction = action.action;
+      }
+    }
+
+    results.add(
+        'Reached maximum step limit ($maxSteps) without fulfilling success criteria.');
+    await TaskHistoryLogger.logTask(
+      routine.goalPrompt,
+      'Timeout',
+      totalTokens,
+      maxSteps,
+      results,
+    );
+    return 'Max steps reached.';
   }
 }

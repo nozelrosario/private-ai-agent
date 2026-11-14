@@ -4,6 +4,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'action_handler.dart';
 import 'ai_service.dart';
+import 'routine_service.dart';
+import 'routine_scheduler_service.dart';
+import '../models/autonomous_routine.dart';
 
 class TelegramService {
   final ActionHandler _actionHandler;
@@ -14,11 +17,30 @@ class TelegramService {
   int _lastUpdateId = 0;
   bool _isPolling = false;
   Timer? _pollingTimer;
+  String? _lastActiveChatId;
+  Completer<bool>? _pendingConfirmationCompleter;
 
   TelegramService(this._actionHandler, this._aiService);
 
   String get botToken => _botToken;
   bool get isEnabled => _isEnabled;
+
+  /// Request approval from user via Telegram for supervised checkpoint actions
+  Future<bool> requestConfirmation(String prompt) async {
+    if (_lastActiveChatId == null || _botToken.isEmpty) return false;
+    await _sendMessage(
+      _lastActiveChatId!,
+      '⚠️ SUPERVISED CHECKPOINT REQUIRED:\n$prompt\n\nReply with YES to approve or NO to reject.',
+    );
+    _pendingConfirmationCompleter = Completer<bool>();
+    Timer(const Duration(seconds: 90), () {
+      if (_pendingConfirmationCompleter != null &&
+          !_pendingConfirmationCompleter!.isCompleted) {
+        _pendingConfirmationCompleter!.complete(false);
+      }
+    });
+    return _pendingConfirmationCompleter!.future;
+  }
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -97,6 +119,87 @@ class TelegramService {
   }
 
   Future<void> _handleIncomingMessage(String chatId, String text) async {
+    _lastActiveChatId = chatId;
+    final trimmed = text.trim();
+
+    // Check if answering a pending supervised confirmation checkpoint
+    if (_pendingConfirmationCompleter != null &&
+        !_pendingConfirmationCompleter!.isCompleted) {
+      if (trimmed.toLowerCase() == 'yes' ||
+          trimmed.toLowerCase() == 'approve') {
+        _pendingConfirmationCompleter!.complete(true);
+        await _sendMessage(chatId, '✅ Action approved. Continuing routine.');
+        return;
+      } else if (trimmed.toLowerCase() == 'no' ||
+          trimmed.toLowerCase() == 'reject') {
+        _pendingConfirmationCompleter!.complete(false);
+        await _sendMessage(chatId, '❌ Action rejected. Skipping.');
+        return;
+      }
+    }
+
+    // Handle routine commands
+    if (trimmed == '/macros' || trimmed == '/routines') {
+      final routines = RoutineService().getAllRoutines();
+      if (routines.isEmpty) {
+        await _sendMessage(chatId, '📋 No autonomous routines configured yet.');
+        return;
+      }
+      final buffer = StringBuffer('📋 Autonomous Routines:\n\n');
+      for (final r in routines) {
+        final status = r.isEnabled ? '🟢 ACTIVE' : '⚪ DISABLED';
+        final last = r.lastRunStatus != null
+            ? ' (Last: ${r.lastRunStatus})'
+            : '';
+        buffer.writeln('• *${r.name}* [${r.id}]');
+        buffer.writeln(
+            '  $status | ${r.schedule.intervalMinutes}m interval$last');
+      }
+      buffer.writeln('\nUse `/run <name>` to execute or `/stop` to cancel.');
+      await _sendMessage(chatId, buffer.toString());
+      return;
+    }
+
+    if (trimmed.startsWith('/run ') || trimmed.startsWith('/macro ')) {
+      final query = trimmed.split(' ').sublist(1).join(' ').trim().toLowerCase();
+      final routines = RoutineService().getAllRoutines();
+      final target = routines.firstWhere(
+        (r) =>
+            r.id.toLowerCase() == query ||
+            r.name.toLowerCase().contains(query),
+        orElse: () => const AutonomousRoutine(
+          id: '',
+          name: '',
+          description: '',
+          personaId: '',
+          goalPrompt: '',
+          successCriteria: '',
+        ),
+      );
+
+      if (target.id.isEmpty) {
+        await _sendMessage(chatId,
+            '❌ Routine "$query" not found. Type /macros to list available routines.');
+        return;
+      }
+
+      await _sendMessage(
+          chatId, '🚀 Triggering routine: *${target.name}* autonomously...');
+      final result = await RoutineSchedulerService().triggerRoutine(
+        target.id,
+        isManual: true,
+      );
+      await _sendMessage(chatId, '🏁 Routine finished with result: $result');
+      return;
+    }
+
+    if (trimmed == '/stop') {
+      RoutineSchedulerService().cancelActiveRoutine();
+      await _sendMessage(
+          chatId, '🛑 Emergency stop signal sent to active routine.');
+      return;
+    }
+
     // Acknowledge receipt
     await _sendMessage(chatId, '🤖 Received: "$text". Working on it...');
 

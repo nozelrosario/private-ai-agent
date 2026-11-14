@@ -80,6 +80,10 @@ flowchart TD
 - `lib/models/saved_skill.dart`:
   - `ActionStep`: Single recorded unit of interaction (`action` name + `params`).
   - `SavedSkill`: Recorded macro sequence with task description, keyword list, `successCount`, `failCount`, `lastUsed`, and `steps`. Provides `isReliable` getter (`successCount >= 1 && failure_rate < 30%`).
+- `lib/models/autonomous_routine.dart`:
+  - `AutonomousRoutine`: Represents an autonomous background routine binding a goal prompt, success criteria, linked persona, pre-execution unlock skill, execution mode (`autonomous` or `supervised`), recurrence schedule (`interval` or `dailyTime`), and safety guardrails (`maxStepsPerRun`, `maxDurationSeconds`, `pauseOnConsecutiveFailures`).
+- `lib/models/routine_ledger_entry.dart`:
+  - Audit trail and deduplication memory unit tracking processed incoming messages, sender identifiers, message snippet hashes, drafted/sent replies, and execution statuses.
 
 ### 3.4 Core Services (`lib/services/`)
 - `lib/services/ai_service.dart`:
@@ -116,6 +120,16 @@ flowchart TD
 - `lib/services/telegram_service.dart`:
   - Long-polling client communicating with `api.telegram.org/bot<token>/getUpdates`.
   - Receives remote text commands, forwards them through `AiService` and `ActionHandler`, and streams progress updates and completion reports back to the Telegram chat.
+  - Supports autonomous routine management commands (`/macros`, `/run <name>`, `/stop`) and interactive confirmation checkpoints.
+- `lib/services/routine_service.dart`:
+  - CRUD persistence for `AutonomousRoutine` models in `autonomous_routines.json`.
+  - Manages routine lifecycle, consecutive failure counting, and full JSON catalog export/import.
+- `lib/services/routine_ledger_service.dart`:
+  - Deduplication and anti-looping memory ledger stored in `routine_ledger.json`.
+  - Generates deterministic FNV-1a hashes of sender and message snippets to guarantee the agent never replies twice to the same incoming message.
+- `lib/services/routine_scheduler_service.dart`:
+  - Manages Android exact alarms via `AlarmManager` for battery-efficient wakeups.
+  - Implements screen state inspection, active-touch user gating (postponing execution if user is actively using the phone), lockscreen wake/unlock sequences, and lock restoration.
 - `lib/services/voice_service.dart`:
   - Wraps `speech_to_text` and `flutter_tts` for bidirectional voice conversations.
 - `lib/services/app_launcher_service.dart`:
@@ -139,7 +153,8 @@ flowchart TD
 - `lib/screens/home_screen.dart`: Primary UI featuring dual modes (Chat mode vs Agent mode), message stream rendering, voice dictation toggle, drawer navigation for past chat sessions, active persona switcher chips, and settings access.
 - `lib/screens/onboarding_screen.dart`: Multi-step setup wizard guiding new users through feature introduction, critical permission requests (Accessibility, Microphone, Notifications, Contacts, Phone, SMS), and AI provider configuration with live connection testing.
 - `lib/screens/settings_screen.dart`: Configuration hub for API credentials, base URLs, model selection with live provider `/models` querying, max step limits, temperature, screen compression toggles, Telegram bot configuration, permission status checks, and active persona & custom skill configuration (active persona switcher, details preview card, quick studio launchers, and JSON backup/restore).
-- `lib/screens/skills_personas_screen.dart`: Central hub for browsing, searching, and managing agent personas and custom skills with instant category filtering, active persona designation, and full JSON catalog backup/restore.
+- `lib/screens/skills_personas_screen.dart`: Central hub for browsing, searching, and managing agent personas, custom skills, and autonomous routines with instant category filtering, active persona designation, and full JSON catalog backup/restore.
+- `lib/screens/routine_editor_screen.dart`: Professional dual-mode studio (Visual Form vs Synchronized JSON Editor) for configuring autonomous routine goals, terminal success criteria, recurrence schedules, guardrails, and supervised confirmation mode.
 - `lib/screens/skill_editor_screen.dart`: Professional dual-mode studio (Visual Composer vs JSON Editor) featuring 7 structured action types, popular app target presets, dynamic parameter chips, selective confirmation checkpoints, and live bidirectional synchronization.
 - `lib/screens/persona_editor_screen.dart`: Professional dual-mode studio (Visual Studio vs JSON Editor) for configuring agent roles, avatar icons, system prompt behavior presets, creativity/temperature tuning, and scoped skill permissions.
 - `lib/screens/task_history_screen.dart`: Visual log viewer showing success rates, token metrics, execution steps, and full step-by-step diagnostic traces.
@@ -158,6 +173,12 @@ flowchart TD
 - `android/app/src/main/kotlin/com/orailnoor/privateagent/MainActivity.kt`:
   - Registers the Flutter `MethodChannel("com.privateagent/accessibility")` and `EventChannel("com.privateagent/accessibility_events")`.
   - Contains `BackgroundEngineReceiver` broadcast receiver (`REGISTER_BACKGROUND_CHANNELS`) to link background Flutter engines (e.g. overlay window) to the accessibility service channels.
+- `android/app/src/main/kotlin/com/orailnoor/privateagent/MacroAlarmScheduler.kt`:
+  - Schedules exact alarms using `AlarmManager.setExactAndAllowWhileIdle()` to survive Doze mode with zero battery drain.
+- `android/app/src/main/kotlin/com/orailnoor/privateagent/MacroWakeReceiver.kt`:
+  - Broadcast receiver handling routine alarm triggers, acquiring partial `WakeLock`, checking user active-screen interaction, and forwarding emergency stop intents.
+- `android/app/src/main/kotlin/com/orailnoor/privateagent/MacroForegroundService.kt`:
+  - Android foreground service displaying a persistent notification and 1-tap "Emergency Stop" button during active autonomous routine runs.
 - `android/app/src/main/AndroidManifest.xml`:
   - Declares necessary Android permissions (`INTERNET`, `RECORD_AUDIO`, `READ_CONTACTS`, `CALL_PHONE`, `SEND_SMS`, `SET_ALARM`, `WRITE_SETTINGS`, `POST_NOTIFICATIONS`, `QUERY_ALL_PACKAGES`, `FOREGROUND_SERVICE`).
   - Registers `AgentAccessibilityService` with `android.permission.BIND_ACCESSIBILITY_SERVICE`.
