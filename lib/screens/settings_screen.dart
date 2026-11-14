@@ -7,6 +7,7 @@ import '../services/shizuku_service.dart';
 import '../services/screen_automation_service.dart';
 import '../services/telegram_service.dart';
 import 'task_history_screen.dart';
+import 'skills_personas_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../config/feature_flags.dart';
@@ -794,6 +795,32 @@ class _SettingsScreenState extends State<SettingsScreen>
             subtitle: 'Required for automation, microphone, and contacts',
             isDark: isDark,
             children: _buildPermissionTiles(),
+          ),
+
+          // Personas & Custom Skills Card
+          _buildSettingsCard(
+            icon: Icons.psychology_outlined,
+            title: 'Personas & Custom Skills',
+            subtitle: 'Configure scoped agent roles and hybrid workflow recipes',
+            isDark: isDark,
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Manage Personas & Skills'),
+                subtitle: const Text(
+                  'Define custom recipes, variables, and scoped agent roles',
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SkillsPersonasScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
 
           // 8. Task History Card

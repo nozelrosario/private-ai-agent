@@ -201,13 +201,27 @@ Located in `SkillMemoryService`:
   $$J(A, B) = \frac{|A \cap B|}{|A \cup B|}$$
 - If similarity is $> 0.6$ and the skill has proven reliable ($< 30\%$ failure rate), PrivateAgent runs the recorded macro directly. This provides near-instant execution and zero API token cost.
 
+### 4.4 Custom Skills & Hybrid Workflow Recipes
+Located in `CustomSkillService` and `SkillRouterService`:
+- **Hybrid SOP Constraints**: Authors write natural language instructions combining structured actions with dynamic placeholders (e.g. `Type "{message}" to {recipient}`).
+- **Intent & Parameter Extraction**: When a request arrives, `SkillRouterService` matches the intent against the active persona's skill catalog and extracts variable parameters into structured arguments.
+- **Selective Confirmation Checkpoints**: Sensitive steps (such as money transfers or outgoing messages) can be configured with `requiresConfirmation: true`. The engine halts and prompts the user for explicit approval before proceeding.
+- **Teach by Demonstration**: `TeachModeService` hooks into Android's native `accessibility_events` stream (`TYPE_VIEW_CLICKED`, `TYPE_VIEW_SCROLLED`) to automatically capture user touches and convert manual interactions into editable recipe steps.
+
+### 4.5 Scoped Agent Personas
+Located in `PersonaService`:
+- Prevents cross-domain skill confusion by scoping subsets of custom skills to specific agent personas (e.g., *Messaging Agent*, *Device Operator*, *Media Specialist*).
+- Users can switch active personas from the Home Screen carousel chips or the dedicated Personas & Skills Hub.
+
 ---
 
 ## 5. File System & Storage Locations
 
 On Android, application data is stored in the app's internal storage sandbox (`/data/user/0/com.orailnoor.privateagent/app_flutter/`):
+- `custom_skills.json`: Custom skill recipes, parameters, and step constraints.
+- `personas.json`: Configured agent personas with prompt modifiers and scoped skill IDs.
 - `task_history.jsonl`: Execution traces, token usage, timestamps, and success metrics.
 - `skills_memory.jsonl`: Saved macro action sequences for fast replay.
 - `chat_history_sessions.json`: Saved conversational sessions.
 - `overlay_chat_handoff/`: Microsecond-timestamped JSON message packets passed between the overlay isolate and foreground process.
-- `shared_preferences`: Stores API keys, base URLs, selected model names, Telegram bot token, theme preferences, and feature toggles.
+- `shared_preferences`: Stores API keys, base URLs, selected model names, active persona ID, Telegram bot token, theme preferences, and feature toggles.

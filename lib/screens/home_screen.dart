@@ -13,6 +13,9 @@ import '../services/chat_history_service.dart';
 import '../services/notification_service.dart';
 import 'settings_screen.dart';
 import 'task_history_screen.dart';
+import 'skills_personas_screen.dart';
+import '../services/persona_service.dart';
+import '../services/custom_skill_service.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../main.dart';
 import '../config/feature_flags.dart';
@@ -60,6 +63,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _initServices() async {
     await _aiService.init();
+    await CustomSkillService().init();
+    await PersonaService().init();
     await _notificationService.requestPermission();
     await _voiceService.init();
     await _telegramService.init();
@@ -172,6 +177,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _scrollToBottom();
             }
           },
+          onConfirmationRequired: (prompt) => _showConfirmationDialog(prompt),
         );
 
         setState(() {
@@ -562,6 +568,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               // Pill selector switcher
               _buildModeSelector(isDark),
 
+              // Active Persona Selector Chips
+              _buildPersonaSelectorBar(isDark),
+
               // API key warning banner
               if (!_aiService.isConfigured)
                 Container(
@@ -925,6 +934,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ListTile(
             horizontalTitleGap: 8,
             leading: Icon(
+              Icons.psychology_rounded,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+              size: 20,
+            ),
+            title: Text('Personas & Skills Hub', style: textStyle),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SkillsPersonasScreen()),
+              ).then((_) => setState(() {}));
+            },
+          ),
+          ListTile(
+            horizontalTitleGap: 8,
+            leading: Icon(
               Icons.history_rounded,
               color: isDark ? Colors.grey[400] : Colors.grey[600],
               size: 20,
@@ -1051,6 +1076,128 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  Widget _buildPersonaSelectorBar(bool isDark) {
+    final personas = PersonaService().getAllPersonas();
+    final activePersona = PersonaService().getActivePersona();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  ...personas.map((persona) {
+                    final isSelected = persona.id == activePersona.id;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        avatar: Icon(
+                          _getPersonaIcon(persona.avatarIcon),
+                          size: 15,
+                          color: isSelected ? Colors.white : Theme.of(context).primaryColor,
+                        ),
+                        label: Text(
+                          persona.name,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                            color: isSelected
+                                ? Colors.white
+                                : (isDark ? Colors.white70 : Colors.black87),
+                          ),
+                        ),
+                        selected: isSelected,
+                        selectedColor: Theme.of(context).primaryColor,
+                        onSelected: (selected) async {
+                          if (selected) {
+                            await PersonaService().setActivePersona(persona.id);
+                            setState(() {});
+                          }
+                        },
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.tune_rounded, size: 20),
+            tooltip: 'Personas & Skills Hub',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SkillsPersonasScreen()),
+              ).then((_) => setState(() {}));
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getPersonaIcon(String iconKey) {
+    switch (iconKey) {
+      case 'chat':
+        return Icons.chat_bubble_outline_rounded;
+      case 'settings_suggest':
+        return Icons.settings_suggest_rounded;
+      case 'play_circle_filled':
+        return Icons.play_circle_fill_rounded;
+      case 'star':
+        return Icons.star_rounded;
+      default:
+        return Icons.smart_toy_rounded;
+    }
+  }
+
+  Future<bool> _showConfirmationDialog(String prompt) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.shield_rounded, color: Colors.amber, size: 22),
+              ),
+              const SizedBox(width: 12),
+              const Text('Confirmation Required', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Text(prompt, style: const TextStyle(fontSize: 14, height: 1.4)),
+          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel Task', style: TextStyle(color: Colors.redAccent)),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).primaryColor,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Approve & Continue'),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
   }
 
   Widget _buildModeButton(

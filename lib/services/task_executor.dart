@@ -9,7 +9,9 @@ import 'task_history_logger.dart';
 import 'shizuku_service.dart';
 import 'skill_memory_service.dart';
 import 'recovery_engine.dart';
+import 'skill_router_service.dart';
 import '../models/saved_skill.dart';
+import '../models/custom_skill.dart';
 
 /// Executes multi-step UI automation tasks using LLM-guided screen reading.
 ///
@@ -27,6 +29,9 @@ class TaskExecutor {
   /// Callback to report progress messages to the UI
   final void Function(String message)? onProgress;
 
+  /// Callback to request user confirmation at sensitive checkpoints
+  final Future<bool> Function(String prompt)? onConfirmationRequired;
+
   /// Set to true to cancel the running task
   bool _cancelled = false;
   Completer<void>? _cancelCompleter;
@@ -37,6 +42,7 @@ class TaskExecutor {
     required AppLauncherService appLauncher,
     required ShizukuService shizukuService,
     this.onProgress,
+    this.onConfirmationRequired,
   }) : _aiService = aiService,
        _screenService = screenService,
        _appLauncher = appLauncher,
@@ -162,6 +168,23 @@ Rules:
       }
     }
 
+    // Check Custom Skill Recipes (Hybrid Workflow SOPs)
+    SkillMatchResult? matchedSkillResult;
+    try {
+      final router = SkillRouterService(_aiService);
+      matchedSkillResult = await router.routeTask(userGoal);
+    } catch (e) {
+      developer.log('Skill routing check skipped: $e', name: 'PrivateAgent');
+    }
+
+    final CustomSkill? activeRecipe = matchedSkillResult?.skill;
+    int recipeStepIndex = 0;
+
+    if (activeRecipe != null && activeRecipe.steps.isNotEmpty) {
+      results.add('Matched Custom Skill: ${activeRecipe.name}');
+      _report('Executing Skill Recipe: "${activeRecipe.name}" (${activeRecipe.steps.length} steps)...');
+    }
+
     // Smart pre-launch shortcuts: execute common sequences without LLM
     final shortcut = _getNavigationShortcut(userGoal);
     String lastAction = '';
@@ -262,10 +285,40 @@ Rules:
             '\n\nWARNING: You have failed $consecutiveFailures times in a row with the same approach. You MUST try a completely different action. If open_app failed, try press_home and look for the app icon on the home screen instead. If click_text failed, use click_at with coordinates. Do NOT repeat the same failed action.';
       }
 
+      // Check recipe step and confirmation checkpoint
+      String recipeDirective = '';
+      if (activeRecipe != null && recipeStepIndex < activeRecipe.steps.length) {
+        final currentRecipeStep = activeRecipe.steps[recipeStepIndex];
+        final instruction = matchedSkillResult!.applyParameters(currentRecipeStep.instruction);
+
+        // Check if this step requires confirmation checkpoint
+        if (currentRecipeStep.requiresConfirmation && onConfirmationRequired != null) {
+          final confirmPrompt = currentRecipeStep.confirmationMessage != null
+              ? matchedSkillResult.applyParameters(currentRecipeStep.confirmationMessage!)
+              : 'The agent is ready to execute: "$instruction". Proceed?';
+          _report('Waiting for confirmation: $confirmPrompt');
+          final confirmed = await onConfirmationRequired!(confirmPrompt);
+          if (!confirmed || _cancelled) {
+            results.add('Task cancelled by user at confirmation checkpoint.');
+            _report('Task cancelled by user.');
+            await _screenService.showToast('Task Cancelled');
+            return 'Task cancelled at confirmation checkpoint.';
+          }
+        }
+
+        recipeDirective = '''
+ACTIVE SKILL RECIPE: "${activeRecipe.name}"
+RECIPE TARGET STEP (${recipeStepIndex + 1}/${activeRecipe.steps.length}): $instruction
+${currentRecipeStep.expectedElementHint != null ? 'HINT ELEMENT: "${matchedSkillResult.applyParameters(currentRecipeStep.expectedElementHint!)}"' : ''}
+${currentRecipeStep.actionTypeHint != null ? 'SUGGESTED ACTION TYPE: ${currentRecipeStep.actionTypeHint}' : ''}
+Focus on accomplishing Step ${recipeStepIndex + 1}. Once this step is achieved on the current screen, you will move to the next.
+''';
+      }
+
       // 2. Build the prompt (system prompt is sent separately via sendTaskMessage)
       final prompt =
           '''TASK: $userGoal
-
+$recipeDirective
 CURRENT SCREEN TEXT DUMP:
 $screenContent$prevResultStr$failureHint
 Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. What is the next action?''';
@@ -601,6 +654,13 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
         consecutiveFailures = 0;
         lastFailedAction = '';
         executedSteps.add(ActionStep(action: action, params: params));
+
+        if (activeRecipe != null && recipeStepIndex < activeRecipe.steps.length) {
+          recipeStepIndex++;
+          if (recipeStepIndex >= activeRecipe.steps.length) {
+            _report('Skill recipe finished all planned steps.');
+          }
+        }
       }
 
       results.add('Step ${step + 1}: $actionResult ($reasoning)');
