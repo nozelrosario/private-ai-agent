@@ -16,8 +16,34 @@ The system operates on a continuous feedback loop:
 
 - **Screen Reading:** Parses the Android UI tree to map clickable, scrollable, and editable elements.
 - **Coordinate-Based Interaction:** Simulates physical screen taps based on coordinate geometry, mitigating issues with missing text labels or inaccessible icons.
+- **Custom Skills & Macro Recipes:** Create deterministic multi-step recipes with parameter placeholders (e.g., `Type "{message}" to {recipient}`) to complete device routines in fewer LLM steps with zero token waste.
+- **Agent Personas:** Scope skills to specialized personas (e.g., *Personal Assistant*, *Device Operator*, *Media Specialist*) with tailored system prompts to eliminate ambiguity.
+- **Teach Mode (by Demonstration):** Interactively record on-screen taps, scrolls, and keystrokes directly on your device to create custom skills automatically.
+- **Confirmation Checkpoints:** Enforce security on sensitive steps (payments, data changes, outgoing messages) requiring explicit user confirmation before proceeding.
 - **Remote Access:** Integrates with the Telegram Bot API via background polling, allowing users to issue commands and monitor task execution progress remotely.
 - **Voice Control:** Native speech-to-text integration for hands-free operation.
+
+## Custom Skills, Personas & Teach Mode
+
+PrivateAgent includes modular automation tools designed to make device control faster, cheaper, and safer:
+
+### 1. Custom Skills & Workflow Recipes
+- Combine structured native actions (`tap`, `input_text`, `launch_app`, `wait`) with natural language triggers.
+- Support dynamic variables and parameter extraction (e.g., `{contact}`, `{query}`).
+- Provide fast, deterministic execution when standard operational procedures (SOPs) are already known.
+
+### 2. Scoped Agent Personas
+- Create and switch between specialized personas from the Home Screen chips or the **Personas & Skills** hub.
+- Configure custom persona descriptions, prompt modifiers, and linked skills.
+- Scoping prevents cross-domain skill confusion by exposing only relevant skills to the active agent.
+
+### 3. Teach by Demonstration (Teach Mode)
+- Tap the **Teach Skill** button to begin an interactive demonstration session.
+- Perform the desired actions on your screen; PrivateAgent captures native accessibility events (`TYPE_VIEW_CLICKED`, `TYPE_VIEW_SCROLLED`) and translates them into an editable recipe draft.
+
+### 4. Selective Confirmation Checkpoints
+- Flag critical or irreversible actions with `requiresConfirmation: true`.
+- The automation engine pauses before executing sensitive actions and prompts for explicit user approval.
 
 ## Installation
 
