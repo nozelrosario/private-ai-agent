@@ -5,6 +5,7 @@ import '../models/custom_skill.dart';
 import '../services/custom_skill_service.dart';
 import '../services/persona_service.dart';
 import 'skill_editor_screen.dart';
+import 'persona_editor_screen.dart';
 
 class SkillsPersonasScreen extends StatefulWidget {
   final int initialTabIndex;
@@ -80,125 +81,17 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
     }
   }
 
-  // --- PERSONA DIALOG (CREATE / EDIT) ---
+  // --- PERSONA EDITOR (FULL-FEATURED COMPOSER) ---
   void _openPersonaDialog([AgentPersona? personaToEdit]) {
-    final nameCtrl = TextEditingController(text: personaToEdit?.name ?? '');
-    final descCtrl = TextEditingController(text: personaToEdit?.description ?? '');
-    final promptCtrl = TextEditingController(text: personaToEdit?.systemPromptModifier ?? '');
-    String avatarIcon = personaToEdit?.avatarIcon ?? 'smart_toy';
-    List<String> assignedSkills = personaToEdit != null
-        ? List.from(personaToEdit.assignedSkillIds)
-        : _skills.map((s) => s.id).toList(); // Default to all skills
-
-    final iconChoices = ['smart_toy', 'chat', 'settings_suggest', 'play_circle_filled', 'star'];
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(personaToEdit == null ? 'Create Agent Persona' : 'Edit Persona'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Persona Name *',
-                      hintText: 'e.g. Work Productivity Agent',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: descCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Role Description',
-                      hintText: 'e.g. Focused on Slack, emails, calendar',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: promptCtrl,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Custom System Prompt Modifier',
-                      hintText: 'Special behavioral instructions or personality',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Avatar Icon', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: iconChoices
-                        .map((ic) => ChoiceChip(
-                              label: Icon(_getIconData(ic), size: 18),
-                              selected: avatarIcon == ic,
-                              onSelected: (selected) {
-                                if (selected) setDialogState(() => avatarIcon = ic);
-                              },
-                            ))
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Scoped Skills (Available to this Persona)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  const SizedBox(height: 6),
-                  ..._skills.map((skill) {
-                    final isAssigned = assignedSkills.contains(skill.id);
-                    return CheckboxListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(skill.name, style: const TextStyle(fontSize: 13)),
-                      subtitle: Text(skill.category, style: const TextStyle(fontSize: 11)),
-                      value: isAssigned,
-                      onChanged: (val) {
-                        setDialogState(() {
-                          if (val == true) {
-                            assignedSkills.add(skill.id);
-                          } else {
-                            assignedSkills.remove(skill.id);
-                          }
-                        });
-                      },
-                    );
-                  }),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                if (nameCtrl.text.trim().isEmpty) return;
-                final newPersona = AgentPersona(
-                  id: personaToEdit?.id ?? 'persona_${DateTime.now().millisecondsSinceEpoch}',
-                  name: nameCtrl.text.trim(),
-                  description: descCtrl.text.trim(),
-                  systemPromptModifier: promptCtrl.text.trim(),
-                  avatarIcon: avatarIcon,
-                  assignedSkillIds: assignedSkills,
-                  isDefault: personaToEdit?.isDefault ?? false,
-                );
-                await _personaService.savePersona(newPersona);
-                await _loadData();
-                Navigator.pop(ctx);
-              },
-              child: const Text('Save Persona'),
-            ),
-          ],
-        ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PersonaEditorScreen(personaToEdit: personaToEdit),
       ),
-    );
+    ).then((_) => _loadData());
   }
 
-  // --- EXPORT / IMPORT JSON ---
+  // --- SKILLS EXPORT / IMPORT JSON ---
   void _showExportDialog() {
     final jsonStr = _skillService.exportSkillsJson();
     showDialog(
@@ -274,6 +167,112 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
     );
   }
 
+  // --- PERSONAS EXPORT / IMPORT JSON ---
+  void _showPersonaExportDialog() {
+    final jsonStr = _personaService.exportPersonasJson();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Export Personas (JSON)'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 300,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              jsonStr,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: jsonStr));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Personas JSON copied to clipboard!')),
+              );
+            },
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy JSON'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPersonaImportDialog() {
+    final inputCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Personas from JSON'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: TextField(
+            controller: inputCtrl,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              hintText: 'Paste personas JSON array here...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final count = await _personaService.importPersonasJson(inputCtrl.text.trim());
+              Navigator.pop(ctx);
+              await _loadData();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Successfully imported $count personas!')),
+              );
+            },
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmResetDefaults() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset All Templates?'),
+        content: const Text(
+          'This will restore all default skills and agent personas to their initial configurations.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset to Defaults'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _skillService.resetToDefaults();
+      await _personaService.resetToDefaults();
+      await _loadData();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('All templates reset to defaults!')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -287,15 +286,40 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.file_upload_outlined),
-            tooltip: 'Import Skills JSON',
-            onPressed: _showImportDialog,
-          ),
-          IconButton(
-            icon: const Icon(Icons.file_download_outlined),
-            tooltip: 'Export Skills JSON',
-            onPressed: _showExportDialog,
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded),
+            tooltip: 'JSON Actions & Reset',
+            onSelected: (val) {
+              if (val == 'export_skills') _showExportDialog();
+              if (val == 'import_skills') _showImportDialog();
+              if (val == 'export_personas') _showPersonaExportDialog();
+              if (val == 'import_personas') _showPersonaImportDialog();
+              if (val == 'reset_defaults') _confirmResetDefaults();
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'export_skills',
+                child: Row(children: [Icon(Icons.file_download_outlined, size: 18), SizedBox(width: 8), Text('Export Skills JSON')]),
+              ),
+              const PopupMenuItem(
+                value: 'import_skills',
+                child: Row(children: [Icon(Icons.file_upload_outlined, size: 18), SizedBox(width: 8), Text('Import Skills JSON')]),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'export_personas',
+                child: Row(children: [Icon(Icons.file_download_outlined, size: 18), SizedBox(width: 8), Text('Export Personas JSON')]),
+              ),
+              const PopupMenuItem(
+                value: 'import_personas',
+                child: Row(children: [Icon(Icons.file_upload_outlined, size: 18), SizedBox(width: 8), Text('Import Personas JSON')]),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'reset_defaults',
+                child: Row(children: [Icon(Icons.restore_rounded, size: 18, color: Colors.orange), SizedBox(width: 8), Text('Reset All Defaults')]),
+              ),
+            ],
           ),
         ],
       ),

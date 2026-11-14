@@ -45,6 +45,11 @@ PrivateAgent includes modular automation tools designed to make device control f
 - Flag critical or irreversible actions with `requiresConfirmation: true`.
 - The automation engine pauses before executing sensitive actions and prompts for explicit user approval.
 
+### 5. Dual-Mode Visual Studio & JSON Editor
+- **Interactive Visual Composer:** Effortlessly assemble multi-step automation recipes with visual action cards (App Launcher, UI Element Tap, Coordinate Tap, Text Input, Wait/Delay, Scroll Direction, Key Press) and dynamic parameter variable chips.
+- **Bi-directional JSON Synchronization:** Switch tabs in real-time between visual forms and formatted JSON code. Power users can inspect, edit, or paste complete recipes and agent personas directly.
+- **In-Settings Management & Backup:** Select active personas, launch creation studios, and perform full JSON catalog backups/imports directly from the Settings screen.
+
 ## Installation
 
 Download the latest APK directly from the [Releases Page](https://github.com/nozelrosario/private-ai-agent/releases).

@@ -99,6 +99,45 @@ class PersonaService {
     activePersonaNotifier.value = getActivePersona();
   }
 
+  String exportPersonasJson() {
+    return const JsonEncoder.withIndent('  ')
+        .convert(_personas.map((p) => p.toJson()).toList());
+  }
+
+  Future<int> importPersonasJson(String jsonString) async {
+    try {
+      final decoded = jsonDecode(jsonString);
+      if (decoded is! List) return 0;
+      int count = 0;
+      for (final item in decoded) {
+        if (item is Map<String, dynamic>) {
+          final persona = AgentPersona.fromJson(item);
+          final index = _personas.indexWhere((p) => p.id == persona.id);
+          if (index >= 0) {
+            _personas[index] = persona;
+          } else {
+            _personas.add(persona);
+          }
+          count++;
+        }
+      }
+      await _saveAll();
+      _updateActiveNotifier();
+      return count;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<void> resetToDefaults() async {
+    _personas = _getDefaultPersonas();
+    _activePersonaId = _personas.first.id;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('active_persona_id', _activePersonaId);
+    await _saveAll();
+    _updateActiveNotifier();
+  }
+
   Future<void> _saveAll() async {
     try {
       final file = await _localFile;

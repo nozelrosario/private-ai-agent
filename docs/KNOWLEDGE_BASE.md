@@ -136,9 +136,12 @@ flowchart TD
   - Manages chat session files (`chat_history_sessions.json`) and handles file-based atomic message handoff between the background overlay isolate and foreground UI.
 
 ### 3.5 UI Screens & Widgets (`lib/screens/` & `lib/widgets/`)
-- `lib/screens/home_screen.dart`: Primary UI featuring dual modes (Chat mode vs Agent mode), message stream rendering, voice dictation toggle, drawer navigation for past chat sessions, and settings access.
+- `lib/screens/home_screen.dart`: Primary UI featuring dual modes (Chat mode vs Agent mode), message stream rendering, voice dictation toggle, drawer navigation for past chat sessions, active persona switcher chips, and settings access.
 - `lib/screens/onboarding_screen.dart`: Multi-step setup wizard guiding new users through feature introduction, critical permission requests (Accessibility, Microphone, Notifications, Contacts, Phone, SMS), and AI provider configuration with live connection testing.
-- `lib/screens/settings_screen.dart`: Configuration hub for API credentials, base URLs, model selection with live provider `/models` querying, max step limits, temperature, screen compression toggles, Telegram bot configuration, and permission status checks.
+- `lib/screens/settings_screen.dart`: Configuration hub for API credentials, base URLs, model selection with live provider `/models` querying, max step limits, temperature, screen compression toggles, Telegram bot configuration, permission status checks, and active persona & custom skill configuration (active persona switcher, details preview card, quick studio launchers, and JSON backup/restore).
+- `lib/screens/skills_personas_screen.dart`: Central hub for browsing, searching, and managing agent personas and custom skills with instant category filtering, active persona designation, and full JSON catalog backup/restore.
+- `lib/screens/skill_editor_screen.dart`: Professional dual-mode studio (Visual Composer vs JSON Editor) featuring 7 structured action types, popular app target presets, dynamic parameter chips, selective confirmation checkpoints, and live bidirectional synchronization.
+- `lib/screens/persona_editor_screen.dart`: Professional dual-mode studio (Visual Studio vs JSON Editor) for configuring agent roles, avatar icons, system prompt behavior presets, creativity/temperature tuning, and scoped skill permissions.
 - `lib/screens/task_history_screen.dart`: Visual log viewer showing success rates, token metrics, execution steps, and full step-by-step diagnostic traces.
 - `lib/widgets/message_bubble.dart`: Styled message bubbles with Markdown rendering (`flutter_markdown`), status chips, and timestamp indicators.
 

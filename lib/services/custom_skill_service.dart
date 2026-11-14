@@ -115,6 +115,11 @@ class CustomSkillService {
     }
   }
 
+  Future<void> resetToDefaults() async {
+    _skills = _getDefaultTemplates();
+    await _saveAll();
+  }
+
   Future<void> _saveAll() async {
     try {
       final file = await _localFile;

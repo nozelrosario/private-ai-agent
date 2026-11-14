@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -6,8 +7,14 @@ import '../services/ai_service.dart';
 import '../services/shizuku_service.dart';
 import '../services/screen_automation_service.dart';
 import '../services/telegram_service.dart';
+import '../models/agent_persona.dart';
+import '../models/custom_skill.dart';
+import '../services/persona_service.dart';
+import '../services/custom_skill_service.dart';
 import 'task_history_screen.dart';
 import 'skills_personas_screen.dart';
+import 'skill_editor_screen.dart';
+import 'persona_editor_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../config/feature_flags.dart';
@@ -47,6 +54,12 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _floatingIconEnabled = false;
   bool _isOverlayPermissionGranted = false;
 
+  final PersonaService _personaService = PersonaService();
+  final CustomSkillService _customSkillService = CustomSkillService();
+  List<AgentPersona> _allPersonas = [];
+  List<CustomSkill> _allSkills = [];
+  AgentPersona? _currentActivePersona;
+
   final Map<String, PermissionStatus> _permissions = {};
 
   @override
@@ -80,6 +93,8 @@ class _SettingsScreenState extends State<SettingsScreen>
     if (FeatureFlags.floatingOverlayEnabled) {
       _checkOverlayStatus();
     }
+    _initPersonasAndSkills();
+    _personaService.activePersonaNotifier.addListener(_onActivePersonaChanged);
   }
 
   Future<void> _checkOverlayStatus() async {
@@ -96,6 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _personaService.activePersonaNotifier.removeListener(_onActivePersonaChanged);
     _apiKeyController.removeListener(_autoSave);
     _baseUrlController.removeListener(_autoSave);
     _modelController.removeListener(_autoSave);
@@ -107,6 +123,26 @@ class _SettingsScreenState extends State<SettingsScreen>
     _telegramTokenController.dispose();
     _maxTokensController.dispose();
     super.dispose();
+  }
+
+  void _onActivePersonaChanged() {
+    if (mounted) {
+      setState(() {
+        _currentActivePersona = _personaService.activePersonaNotifier.value;
+      });
+    }
+  }
+
+  Future<void> _initPersonasAndSkills() async {
+    await _customSkillService.init();
+    await _personaService.init();
+    if (mounted) {
+      setState(() {
+        _allPersonas = _personaService.getAllPersonas();
+        _allSkills = _customSkillService.getAllSkills(includeDisabled: true);
+        _currentActivePersona = _personaService.getActivePersona();
+      });
+    }
   }
 
   @override
@@ -798,30 +834,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
 
           // Personas & Custom Skills Card
-          _buildSettingsCard(
-            icon: Icons.psychology_outlined,
-            title: 'Personas & Custom Skills',
-            subtitle: 'Configure scoped agent roles and hybrid workflow recipes',
-            isDark: isDark,
-            children: [
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Manage Personas & Skills'),
-                subtitle: const Text(
-                  'Define custom recipes, variables, and scoped agent roles',
-                ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const SkillsPersonasScreen(),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
+          _buildPersonasAndSkillsSettingsCard(isDark),
 
           // 8. Task History Card
           _buildSettingsCard(
@@ -1121,5 +1134,630 @@ class _SettingsScreenState extends State<SettingsScreen>
         );
       },
     );
+  }
+
+  IconData _getPersonaIcon(String iconKey) {
+    switch (iconKey) {
+      case 'chat':
+        return Icons.chat_bubble_outline_rounded;
+      case 'settings_suggest':
+        return Icons.settings_suggest_rounded;
+      case 'play_circle_filled':
+        return Icons.play_circle_fill_rounded;
+      case 'account_balance':
+        return Icons.account_balance_rounded;
+      case 'shopping_cart':
+        return Icons.shopping_cart_rounded;
+      case 'work':
+        return Icons.work_rounded;
+      case 'star':
+        return Icons.star_rounded;
+      default:
+        return Icons.smart_toy_rounded;
+    }
+  }
+
+  Widget _buildPersonasAndSkillsSettingsCard(bool isDark) {
+    final activePersona = _currentActivePersona;
+    final theme = Theme.of(context);
+    final cardBg = isDark
+        ? theme.colorScheme.surfaceContainerHighest.withAlpha(80)
+        : theme.colorScheme.surfaceContainerLowest;
+
+    return _buildSettingsCard(
+      icon: Icons.psychology_outlined,
+      title: 'Personas & Custom Skills',
+      subtitle:
+          'Configure active agent persona, scoped skills, and visual recipes',
+      isDark: isDark,
+      children: [
+        // 1. Active Persona Selector Dropdown
+        if (_allPersonas.isNotEmpty) ...[
+          DropdownButtonFormField<String>(
+            isExpanded: true,
+            value: _allPersonas.any((p) => p.id == activePersona?.id)
+                ? activePersona?.id
+                : _allPersonas.first.id,
+            decoration: const InputDecoration(
+              labelText: 'Active Persona',
+              border: OutlineInputBorder(),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              prefixIcon: Icon(Icons.badge_outlined),
+            ),
+            items: _allPersonas.map((persona) {
+              return DropdownMenuItem<String>(
+                value: persona.id,
+                child: Row(
+                  children: [
+                    Icon(_getPersonaIcon(persona.avatarIcon), size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        persona.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (persona.isDefault) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary.withAlpha(30),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'DEFAULT',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }).toList(),
+            onChanged: (newId) async {
+              if (newId != null) {
+                await _personaService.setActivePersona(newId);
+                _initPersonasAndSkills();
+              }
+            },
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // 2. Active Persona Details Preview Card
+        if (activePersona != null) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cardBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.outlineVariant.withAlpha(120),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: theme.colorScheme.primaryContainer,
+                      child: Icon(
+                        _getPersonaIcon(activePersona.avatarIcon),
+                        color: theme.colorScheme.primary,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  activePersona.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                tooltip: 'Edit Persona',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => PersonaEditorScreen(
+                                          personaToEdit: activePersona),
+                                    ),
+                                  );
+                                  _initPersonasAndSkills();
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            activePersona.description,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(Icons.thermostat, size: 14),
+                      label: Text(
+                          activePersona.temperatureOverride != null
+                              ? 'Temp: ${activePersona.temperatureOverride!.toStringAsFixed(1)}'
+                              : 'Temp: Default'),
+                      labelStyle: const TextStyle(fontSize: 11),
+                      padding: EdgeInsets.zero,
+                    ),
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: Icon(
+                        activePersona.assignedSkillIds.isEmpty
+                            ? Icons.all_inclusive
+                            : Icons.tune,
+                        size: 14,
+                      ),
+                      label: Text(
+                        activePersona.assignedSkillIds.isEmpty
+                            ? 'All skills permitted'
+                            : '${activePersona.assignedSkillIds.length} skills scoped',
+                      ),
+                      labelStyle: const TextStyle(fontSize: 11),
+                      padding: EdgeInsets.zero,
+                    ),
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(Icons.psychology_alt, size: 14),
+                      label: Text(
+                        activePersona.systemPromptModifier.isNotEmpty
+                            ? 'Prompt: ${activePersona.systemPromptModifier.length} chars'
+                            : 'Default Prompt',
+                      ),
+                      labelStyle: const TextStyle(fontSize: 11),
+                      padding: EdgeInsets.zero,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+
+        // 3. Stats Summary
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color:
+                      theme.colorScheme.surfaceContainerHighest.withAlpha(50),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.face_retouching_natural,
+                        size: 18, color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${_allPersonas.length} Personas',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                          Text(
+                            'Active: ${activePersona?.name ?? "None"}',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: theme.colorScheme.onSurfaceVariant),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color:
+                      theme.colorScheme.surfaceContainerHighest.withAlpha(50),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.bolt, size: 18, color: Colors.amber[700]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${_allSkills.where((s) => s.isEnabled).length} / ${_allSkills.length} Skills',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                          Text(
+                            'Active Recipes',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        // 4. Quick Action Hub Buttons
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const SkillsPersonasScreen(initialTabIndex: 0),
+                    ),
+                  );
+                  _initPersonasAndSkills();
+                },
+                icon: const Icon(Icons.people_outline, size: 18),
+                label: const Text('Personas'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const SkillsPersonasScreen(initialTabIndex: 1),
+                    ),
+                  );
+                  _initPersonasAndSkills();
+                },
+                icon: const Icon(Icons.list_alt_rounded, size: 18),
+                label: const Text('Skills Library'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SkillEditorScreen(),
+                    ),
+                  );
+                  if (result == true) {
+                    _initPersonasAndSkills();
+                  }
+                },
+                icon: const Icon(Icons.add_task_rounded, size: 18),
+                label: const Text('Compose Skill'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PersonaEditorScreen(),
+                    ),
+                  );
+                  if (result == true) {
+                    _initPersonasAndSkills();
+                  }
+                },
+                icon: const Icon(Icons.person_add_outlined, size: 18),
+                label: const Text('New Persona'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+
+        // 5. JSON Import / Export & Reset Actions
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          leading: const Icon(Icons.code_rounded, size: 20),
+          title: const Text('Manage via JSON & Backup'),
+          subtitle: const Text('Import or export skills & personas configs'),
+          trailing: PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded),
+            tooltip: 'JSON Actions',
+            onSelected: (value) async {
+              switch (value) {
+                case 'export_skills':
+                  _showSettingsExportDialog(
+                      'Custom Skills', _customSkillService.exportSkillsJson());
+                  break;
+                case 'import_skills':
+                  _showSettingsImportSkillsDialog();
+                  break;
+                case 'export_personas':
+                  _showSettingsExportDialog(
+                      'Agent Personas', _personaService.exportPersonasJson());
+                  break;
+                case 'import_personas':
+                  _showSettingsImportPersonasDialog();
+                  break;
+                case 'reset_defaults':
+                  _confirmResetDefaults();
+                  break;
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'export_skills',
+                child: Row(
+                  children: [
+                    Icon(Icons.file_download_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('Export Skills (JSON)'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'import_skills',
+                child: Row(
+                  children: [
+                    Icon(Icons.file_upload_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('Import Skills (JSON)'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'export_personas',
+                child: Row(
+                  children: [
+                    Icon(Icons.download_rounded, size: 18),
+                    SizedBox(width: 8),
+                    Text('Export Personas (JSON)'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'import_personas',
+                child: Row(
+                  children: [
+                    Icon(Icons.upload_rounded, size: 18),
+                    SizedBox(width: 8),
+                    Text('Import Personas (JSON)'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'reset_defaults',
+                child: Row(
+                  children: [
+                    Icon(Icons.restore_rounded,
+                        color: Colors.orange, size: 18),
+                    SizedBox(width: 8),
+                    Text('Reset to Defaults',
+                        style: TextStyle(color: Colors.orange)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showSettingsExportDialog(String title, String jsonStr) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Export $title (JSON)'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 300,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              jsonStr,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: jsonStr));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('$title JSON copied to clipboard!')),
+              );
+            },
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy JSON'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSettingsImportSkillsDialog() {
+    final inputCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Skills from JSON'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: TextField(
+            controller: inputCtrl,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              hintText: 'Paste skills JSON array here...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final count = await _customSkillService
+                  .importSkillsJson(inputCtrl.text.trim());
+              Navigator.pop(ctx);
+              await _initPersonasAndSkills();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content: Text('Successfully imported $count skills!')),
+                );
+              }
+            },
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSettingsImportPersonasDialog() {
+    final inputCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Personas from JSON'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: TextField(
+            controller: inputCtrl,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              hintText: 'Paste personas JSON array here...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final count = await _personaService
+                  .importPersonasJson(inputCtrl.text.trim());
+              Navigator.pop(ctx);
+              await _initPersonasAndSkills();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content: Text('Successfully imported $count personas!')),
+                );
+              }
+            },
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmResetDefaults() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset All Templates?'),
+        content: const Text(
+          'This will restore all default skills and agent personas to their initial configurations.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset to Defaults'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _customSkillService.resetToDefaults();
+      await _personaService.resetToDefaults();
+      await _initPersonasAndSkills();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Skills & Personas reset to initial templates!')),
+        );
+      }
+    }
   }
 }
