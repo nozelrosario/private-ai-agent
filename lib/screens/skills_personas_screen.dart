@@ -35,7 +35,14 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
       vsync: this,
       initialIndex: widget.initialTabIndex,
     );
+    _tabController.addListener(_handleTabChange);
     _loadData();
+  }
+
+  void _handleTabChange() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _loadData() async {
@@ -50,6 +57,7 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
 
   @override
   void dispose() {
+    _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
     super.dispose();
   }
@@ -330,19 +338,25 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
           _buildSkillsTab(),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          if (_tabController.index == 0) {
-            _openPersonaDialog();
-          } else {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SkillEditorScreen()),
-            ).then((_) => _loadData());
-          }
+      floatingActionButton: AnimatedBuilder(
+        animation: _tabController,
+        builder: (context, _) {
+          final isPersonas = (_tabController.animation?.value ?? _tabController.index).round() == 0;
+          return FloatingActionButton.extended(
+            onPressed: () {
+              if (isPersonas) {
+                _openPersonaDialog();
+              } else {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SkillEditorScreen()),
+                ).then((_) => _loadData());
+              }
+            },
+            icon: Icon(isPersonas ? Icons.person_add_outlined : Icons.add_task_rounded),
+            label: Text(isPersonas ? 'New Persona' : 'New Skill'),
+          );
         },
-        icon: const Icon(Icons.add_rounded),
-        label: Text(_tabController.index == 0 ? 'New Persona' : 'New Skill'),
       ),
     );
   }

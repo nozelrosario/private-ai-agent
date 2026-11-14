@@ -995,6 +995,7 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                         child: Row(
                           children: [
                             Container(
+                              constraints: const BoxConstraints(maxWidth: 120),
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
                                 color: Theme.of(context).primaryColor.withOpacity(0.12),
@@ -1007,9 +1008,11 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                                   color: Theme.of(context).primaryColor,
                                   fontFamily: 'monospace',
                                 ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 8),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1022,13 +1025,30 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                                 ],
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.edit_outlined, size: 18),
-                              onPressed: () => _addParameterDialog(param, idx),
+                            SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: IconButton(
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                iconSize: 18,
+                                icon: const Icon(Icons.edit_outlined),
+                                tooltip: 'Edit Variable',
+                                onPressed: () => _addParameterDialog(param, idx),
+                              ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.redAccent),
-                              onPressed: () => setState(() => _parameters.removeAt(idx)),
+                            const SizedBox(width: 4),
+                            SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: IconButton(
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                iconSize: 18,
+                                icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                                tooltip: 'Delete Variable',
+                                onPressed: () => setState(() => _parameters.removeAt(idx)),
+                              ),
                             ),
                           ],
                         ),
@@ -1049,18 +1069,25 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Row(
-                        children: [
-                          Icon(Icons.format_list_numbered_rounded, color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          const Text('Action Sequence', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                        ],
+                      Icon(Icons.format_list_numbered_rounded, color: Theme.of(context).primaryColor),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Action Sequence',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      Row(
+                      Wrap(
+                        spacing: 4,
                         children: [
                           TextButton.icon(
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            ),
                             onPressed: _toggleTeachMode,
                             icon: Icon(
                               TeachModeService().isRecording ? Icons.stop_circle_rounded : Icons.fiber_manual_record_rounded,
@@ -1077,9 +1104,13 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                             ),
                           ),
                           TextButton.icon(
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            ),
                             onPressed: () => _openStepComposerDialog(),
-                            icon: const Icon(Icons.add_task_rounded, size: 18),
-                            label: const Text('Add Step'),
+                            icon: const Icon(Icons.add_task_rounded, size: 16),
+                            label: const Text('Add Step', style: TextStyle(fontSize: 12)),
                           ),
                         ],
                       ),
@@ -1120,6 +1151,7 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                       return Container(
                         margin: const EdgeInsets.only(bottom: 10),
                         padding: const EdgeInsets.all(12),
+                        clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
                           color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
                           borderRadius: BorderRadius.circular(14),
@@ -1134,77 +1166,146 @@ class _SkillEditorScreenState extends State<SkillEditorScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                CircleAvatar(
-                                  radius: 12,
-                                  backgroundColor: actionColor,
-                                  child: Text('${idx + 1}', style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold)),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: actionColor.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                Expanded(
+                                  child: Wrap(
+                                    spacing: 6,
+                                    runSpacing: 4,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
                                     children: [
-                                      Icon(actionIcon, size: 12, color: actionColor),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        step.actionTypeHint?.toUpperCase() ?? 'ACTION',
-                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: actionColor),
+                                      CircleAvatar(
+                                        radius: 11,
+                                        backgroundColor: actionColor,
+                                        child: Text(
+                                          '${idx + 1}',
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
                                       ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                                        decoration: BoxDecoration(
+                                          color: actionColor.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(actionIcon, size: 12, color: actionColor),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              step.actionTypeHint?.toUpperCase() ?? 'ACTION',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                                color: actionColor,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (step.targetAppPackage != null && step.targetAppPackage!.trim().isNotEmpty)
+                                        Container(
+                                          constraints: const BoxConstraints(maxWidth: 130),
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey.withOpacity(0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            step.targetAppPackage!,
+                                            style: const TextStyle(
+                                              fontSize: 9.5,
+                                              color: Colors.grey,
+                                              fontFamily: 'monospace',
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 ),
-                                if (step.targetAppPackage != null) ...[
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey.withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(6),
+                                const SizedBox(width: 4),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 26,
+                                      height: 26,
+                                      child: IconButton(
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        iconSize: 16,
+                                        icon: const Icon(Icons.arrow_upward_rounded),
+                                        tooltip: 'Move Up',
+                                        onPressed: idx > 0 ? () => _moveStep(idx, idx - 1) : null,
+                                      ),
                                     ),
-                                    child: Text(
-                                      step.targetAppPackage!,
-                                      style: const TextStyle(fontSize: 10, color: Colors.grey, fontFamily: 'monospace'),
+                                    const SizedBox(width: 2),
+                                    SizedBox(
+                                      width: 26,
+                                      height: 26,
+                                      child: IconButton(
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        iconSize: 16,
+                                        icon: const Icon(Icons.arrow_downward_rounded),
+                                        tooltip: 'Move Down',
+                                        onPressed: idx < _steps.length - 1 ? () => _moveStep(idx, idx + 1) : null,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                                const Spacer(),
-                                IconButton(
-                                  icon: const Icon(Icons.arrow_upward_rounded, size: 16),
-                                  tooltip: 'Move Up',
-                                  onPressed: idx > 0 ? () => _moveStep(idx, idx - 1) : null,
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.arrow_downward_rounded, size: 16),
-                                  tooltip: 'Move Down',
-                                  onPressed: idx < _steps.length - 1 ? () => _moveStep(idx, idx + 1) : null,
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.copy_rounded, size: 16),
-                                  tooltip: 'Duplicate',
-                                  onPressed: () => _duplicateStep(idx),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.edit_outlined, size: 16),
-                                  tooltip: 'Edit Step',
-                                  onPressed: () => _openStepComposerDialog(step, idx),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Colors.redAccent),
-                                  tooltip: 'Delete',
-                                  onPressed: () {
-                                    setState(() {
-                                      _steps.removeAt(idx);
-                                      for (int i = 0; i < _steps.length; i++) {
-                                        _steps[i] = _steps[i].copyWith(stepNumber: i + 1);
-                                      }
-                                    });
-                                  },
+                                    const SizedBox(width: 2),
+                                    SizedBox(
+                                      width: 26,
+                                      height: 26,
+                                      child: IconButton(
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        iconSize: 16,
+                                        icon: const Icon(Icons.copy_rounded),
+                                        tooltip: 'Duplicate',
+                                        onPressed: () => _duplicateStep(idx),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 2),
+                                    SizedBox(
+                                      width: 26,
+                                      height: 26,
+                                      child: IconButton(
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        iconSize: 16,
+                                        icon: const Icon(Icons.edit_outlined),
+                                        tooltip: 'Edit Step',
+                                        onPressed: () => _openStepComposerDialog(step, idx),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 2),
+                                    SizedBox(
+                                      width: 26,
+                                      height: 26,
+                                      child: IconButton(
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        iconSize: 16,
+                                        icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                                        tooltip: 'Delete',
+                                        onPressed: () {
+                                          setState(() {
+                                            _steps.removeAt(idx);
+                                            for (int i = 0; i < _steps.length; i++) {
+                                              _steps[i] = _steps[i].copyWith(stepNumber: i + 1);
+                                            }
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
