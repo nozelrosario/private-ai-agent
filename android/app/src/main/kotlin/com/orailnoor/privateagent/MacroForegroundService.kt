@@ -84,7 +84,7 @@ class MacroForegroundService : Service() {
             ACTION_START_EXECUTION -> {
                 isRunning = true
                 isExecutingRoutine = true
-                val title = intent.getStringExtra("routine_title") ?: "Running Autonomous Routine..."
+                val title = intent?.getStringExtra("routine_title") ?: "Running Autonomous Routine..."
                 val notification = buildExecutionNotification(title)
                 startForeground(NOTIFICATION_ID, notification)
             }
@@ -92,7 +92,7 @@ class MacroForegroundService : Service() {
             else -> { // ACTION_START_LISTENER
                 isRunning = true
                 isExecutingRoutine = false
-                val statusText = intent.getStringExtra("status_text") ?: "Listening for Telegram commands & scheduled routines"
+                val statusText = intent?.getStringExtra("status_text") ?: "Listening for Telegram commands & scheduled routines"
                 val notification = buildListenerNotification(statusText)
                 startForeground(NOTIFICATION_ID, notification)
             }
