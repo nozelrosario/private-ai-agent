@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_message.dart';
 import '../services/ai_service.dart';
 import '../services/action_handler.dart';
@@ -106,6 +107,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         activeRoutineExecutor?.cancel();
       },
     );
+
+    final prefs = await SharedPreferences.getInstance();
+    final bgServiceEnabled = prefs.getBool('background_service_enabled') ?? true;
+    if (bgServiceEnabled || _telegramService.isEnabled) {
+      await ScreenAutomationService().startBackgroundService();
+    }
 
     if (mounted) {
       setState(() {});

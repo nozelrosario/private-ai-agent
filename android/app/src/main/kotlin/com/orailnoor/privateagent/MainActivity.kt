@@ -23,6 +23,43 @@ class MainActivity : FlutterActivity() {
     private var eventSink: EventChannel.EventSink? = null
     private var overlayView: View? = null
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleLockscreenFlags()
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleLockscreenFlags() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val routineId = intent?.getStringExtra("trigger_routine_id")
+        if (!routineId.isNullOrEmpty()) {
+            if (channelSink != null) {
+                channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+            } else {
+                pendingRoutineId = routineId
+            }
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         currentActivity = this
@@ -81,11 +118,19 @@ class MainActivity : FlutterActivity() {
         var channelSink: MethodChannel? = null
         var currentActivity: MainActivity? = null
         var pendingFilePickerResult: MethodChannel.Result? = null
+        var pendingRoutineId: String? = null
         const val FILE_PICKER_REQUEST_CODE = 4123
 
         fun registerAccessibilityChannel(flutterEngine: FlutterEngine, context: android.content.Context) {
             val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
             channelSink = channel
+
+            // If an alarm woke the activity before channel was initialized, deliver it now
+            pendingRoutineId?.let { rId ->
+                channel.invokeMethod("onRoutineTriggered", mapOf("routine_id" to rId))
+                pendingRoutineId = null
+            }
+
             channel.setMethodCallHandler { call, result ->
                     android.util.Log.d("PrivateAgentKotlin", "Received method call: ${call.method}")
                     when (call.method) {
@@ -284,9 +329,63 @@ class MainActivity : FlutterActivity() {
                         }
 
                         "stopRoutineForegroundService" -> {
+                            val returnToListener = call.argument<Boolean>("returnToListener") ?: true
+                            if (returnToListener) {
+                                MacroForegroundService.startListener(context)
+                            } else {
+                                MacroForegroundService.stop(context)
+                            }
+                            MacroWakeReceiver.releaseWakeLock()
+                            result.success(true)
+                        }
+
+                        "startBackgroundService" -> {
+                            val status = call.argument<String>("status") ?: "Listening for Telegram commands & scheduled routines"
+                            MacroForegroundService.startListener(context, status)
+                            result.success(true)
+                        }
+
+                        "stopBackgroundService" -> {
                             MacroForegroundService.stop(context)
                             MacroWakeReceiver.releaseWakeLock()
                             result.success(true)
+                        }
+
+                        "isBackgroundServiceRunning" -> {
+                            result.success(MacroForegroundService.isRunning)
+                        }
+
+                        "requestIgnoreBatteryOptimizations" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                    result.success(true)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "Failed to open battery optimization settings: ${e.message}")
+                                    result.error("BATTERY_OPTI_ERROR", e.message, null)
+                                }
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "isIgnoringBatteryOptimizations" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                                result.success(pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false)
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "getPendingRoutine" -> {
+                            val rId = pendingRoutineId
+                            pendingRoutineId = null
+                            result.success(rId)
                         }
 
                         "lockScreen" -> {

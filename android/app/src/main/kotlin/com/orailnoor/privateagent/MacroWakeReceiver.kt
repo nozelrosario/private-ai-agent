@@ -61,20 +61,36 @@ class MacroWakeReceiver : BroadcastReceiver() {
                 // Acquire WakeLock
                 acquireWakeLock(context)
 
-                // Start Foreground Service to display ongoing notification
-                MacroForegroundService.start(context, "Running Autonomous Routine...")
+                // Start Foreground Service in execution mode
+                MacroForegroundService.startExecution(context, "Executing scheduled routine...")
 
                 // Notify Flutter
                 onRoutineTriggerCallback?.invoke(routineId)
-                MainActivity.channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+                if (MainActivity.channelSink != null) {
+                    MainActivity.channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+                } else {
+                    Log.d(TAG, "MainActivity.channelSink is null! Launching MainActivity with routine_id: $routineId")
+                    val launchIntent = Intent(context, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                        putExtra("trigger_routine_id", routineId)
+                    }
+                    context.startActivity(launchIntent)
+                }
             }
 
             action.endsWith(".STOP_ROUTINE") -> {
                 Log.d(TAG, "Stop routine requested by user")
-                MacroForegroundService.stop(context)
                 releaseWakeLock()
                 onRoutineStopCallback?.invoke()
                 MainActivity.channelSink?.invokeMethod("onRoutineStopped", null)
+                MacroForegroundService.startListener(context)
+            }
+
+            action.endsWith(".STOP_BACKGROUND_SERVICE") -> {
+                Log.d(TAG, "Stop background listener requested by user")
+                releaseWakeLock()
+                MacroForegroundService.stop(context)
+                MainActivity.channelSink?.invokeMethod("onBackgroundServiceStopped", null)
             }
         }
     }

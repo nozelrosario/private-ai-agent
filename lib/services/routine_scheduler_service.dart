@@ -51,10 +51,20 @@ class RoutineSchedulerService {
         case 'onRoutineStopped':
           cancelActiveRoutine();
           break;
+        case 'onBackgroundServiceStopped':
+          debugPrint('Background service stopped by user notification action');
+          break;
       }
     });
 
     _initialized = true;
+
+    // Check if an alarm triggered cold start with a pending routine
+    final pendingRoutine = await _screenService.getPendingRoutine();
+    if (pendingRoutine != null && pendingRoutine.isNotEmpty) {
+      unawaited(triggerRoutine(pendingRoutine));
+    }
+
     await syncAllSchedules();
   }
 
@@ -62,12 +72,18 @@ class RoutineSchedulerService {
   Future<void> syncAllSchedules() async {
     await _routineService.init();
     final routines = _routineService.getAllRoutines();
+    bool hasActiveSchedules = false;
     for (final routine in routines) {
       if (routine.isEnabled && routine.schedule.isEnabled) {
+        hasActiveSchedules = true;
         await scheduleRoutine(routine);
       } else {
         await cancelRoutine(routine.id);
       }
+    }
+
+    if (hasActiveSchedules) {
+      await _screenService.startBackgroundService();
     }
   }
 
@@ -267,9 +283,9 @@ class RoutineSchedulerService {
         } catch (_) {}
       }
 
-      // 7. Stop Foreground Service & release WakeLock
+      // 7. Stop Execution Mode and return to persistent background listener & release WakeLock
       try {
-        await _channel.invokeMethod('stopRoutineForegroundService');
+        await _channel.invokeMethod('stopRoutineForegroundService', {'returnToListener': true});
       } catch (_) {}
 
       _isRoutineRunning = false;

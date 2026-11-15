@@ -21,7 +21,7 @@ The system operates on a continuous feedback loop:
 - **Teach Mode (by Demonstration):** Interactively record on-screen taps, scrolls, and keystrokes directly on your device to create custom skills automatically.
 - **Confirmation Checkpoints:** Enforce security on sensitive steps (payments, data changes, outgoing messages) requiring explicit user confirmation before proceeding.
 - **Autonomous Routines & Background Scheduler:** Schedule periodic, unattended multi-step AI loops (e.g. checking WhatsApp messages and auto-replying based on persona tone) with strict safety bounds, anti-loop deduplication ledger, and native Android `AlarmManager` wakeups.
-- **Remote Access:** Integrates with the Telegram Bot API via background polling, allowing users to issue commands, run routines, approve checkpoints, and monitor task execution progress remotely.
+- **Remote Access & 24/7 Background Listener:** Integrates with the Telegram Bot API via a persistent background listener service, allowing users to issue commands, run routines, approve checkpoints, and monitor task execution progress remotely even when the device is locked.
 - **Voice Control:** Native speech-to-text integration for hands-free operation.
 
 ## Custom Skills, Personas & Teach Mode
@@ -57,7 +57,7 @@ PrivateAgent includes modular automation tools designed to make device control f
 - **Anti-Looping Run Ledger:** Employs deterministic FNV-1a hashing and local ledger tracking to prevent duplicate auto-replies across periodic cycles.
 - **Active-User Touch Gating:** Automatically detects if the user is actively using the device and defers routine execution by 5 minutes rather than stealing focus.
 - **Unattended Lock Lifecycle:** Wakes locked screens, executes pre-execution unlock skills, and automatically re-locks the device upon completion if it was locked initially.
-- **Battery-Friendly Android Alarms:** Uses `AlarmManager.setExactAndAllowWhileIdle()` to sleep with zero idle battery drain, raising a transient Foreground Service with a 1-tap **Emergency Stop** notification while running.
+- **Persistent Background Listener & Android Alarms:** Runs a persistent low-power `START_STICKY` Foreground Service and `AlarmManager.setExactAndAllowWhileIdle()` so Telegram commands and scheduled routines trigger reliably 24/7 without being suspended by Android Doze. Auto-restarts on device reboot via `BootReceiver` and supports one-tap Battery Optimization exemption in Settings.
 - **Supervised vs Autonomous Modes:** Choose between full auto-reply or supervised approval checkpoints requiring explicit confirmation before outgoing messages are sent.
 - **Telegram Routine Activity Notifications:** Automatically dispatches alerts to your Telegram chat when scheduled routines are triggered, postponed, or finished with execution outcomes.
 - **Rich Intent & Reasoning Execution History:** Tapping any task in History displays interactive timeline cards with the LLM's intent, reasoning, action parameters, and evaluator verdicts, plus a 1-tap "Copy Trace" export for prompt tweaking.
@@ -114,7 +114,8 @@ Info and Accessibility Settings during onboarding.
 To enable remote access:
 1. Acquire a bot token from BotFather on Telegram.
 2. Input the token in the PrivateAgent Settings screen and enable the integration toggle.
-3. The application will maintain a background polling connection to the Telegram API to receive commands.
+3. The application will maintain a persistent background listener service connected to the Telegram API to receive commands even when the device is locked.
+4. (Optional but recommended) In **Settings > 24/7 Background Service & Power**, tap **Exempt** to grant Battery Optimization exemption, ensuring Android Doze does not throttle network or Dart timers while sleeping.
 
 ### Supported Remote Commands:
 - Natural language instructions (e.g., `"Open Spotify and play my playlist"`, `"Send SMS to John saying I'm on my way"`).

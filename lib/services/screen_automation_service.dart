@@ -422,4 +422,63 @@ class ScreenAutomationService {
       return null;
     }
   }
+
+  /// Start persistent 24/7 background listener service
+  Future<bool> startBackgroundService({String? status}) async {
+    try {
+      return await _channel.invokeMethod<bool>('startBackgroundService', {
+        if (status != null) 'status': status,
+      }) ?? false;
+    } catch (e) {
+      developer.log('Failed to start background service: $e', name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Stop persistent 24/7 background listener service
+  Future<bool> stopBackgroundService() async {
+    try {
+      return await _channel.invokeMethod<bool>('stopBackgroundService') ?? false;
+    } catch (e) {
+      developer.log('Failed to stop background service: $e', name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Check if the persistent background listener service is active
+  Future<bool> isBackgroundServiceRunning() async {
+    try {
+      return await _channel.invokeMethod<bool>('isBackgroundServiceRunning') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Request exemption from Android battery optimizations (Doze mode)
+  Future<bool> requestIgnoreBatteryOptimizations() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations') ?? false;
+    } catch (e) {
+      developer.log('Failed to request battery optimization ignore: $e', name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Check if the app is currently exempt from battery optimizations
+  Future<bool> isIgnoringBatteryOptimizations() async {
+    try {
+      return await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Query any routine ID that triggered activity launch while locked/backgrounded
+  Future<String?> getPendingRoutine() async {
+    try {
+      return await _channel.invokeMethod<String>('getPendingRoutine');
+    } catch (e) {
+      return null;
+    }
+  }
 }

@@ -6,6 +6,7 @@ import 'action_handler.dart';
 import 'ai_service.dart';
 import 'routine_service.dart';
 import 'routine_scheduler_service.dart';
+import 'screen_automation_service.dart';
 import '../models/autonomous_routine.dart';
 
 class TelegramService {
@@ -81,6 +82,7 @@ class TelegramService {
   void startPolling() {
     if (_isPolling) return;
     _isPolling = true;
+    ScreenAutomationService().startBackgroundService();
     _pollUpdates();
   }
 
