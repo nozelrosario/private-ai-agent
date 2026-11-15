@@ -881,7 +881,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
         'step': i + 1,
         'action': step.action,
         'params': step.params,
-        'reasoning': 'Skill Memory Replay: ${step.description ?? skill.goal}',
+        'reasoning': 'Skill Memory Replay: ${skill.task}',
         'result': actionResult,
         'status': success ? 'success' : 'failed',
         'timestamp': DateTime.now().toIso8601String(),
