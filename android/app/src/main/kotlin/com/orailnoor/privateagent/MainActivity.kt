@@ -49,6 +49,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        moveTaskToBack(true)
+    }
+
     private fun handleIntent(intent: Intent?) {
         val routineId = intent?.getStringExtra("trigger_routine_id")
         if (!routineId.isNullOrEmpty()) {
@@ -56,6 +61,19 @@ class MainActivity : FlutterActivity() {
                 channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
             } else {
                 pendingRoutineId = routineId
+            }
+        }
+
+        val tgText = intent?.getStringExtra("telegram_text")
+        val tgChatId = intent?.getStringExtra("telegram_chat_id")
+        if (!tgText.isNullOrEmpty() && !tgChatId.isNullOrEmpty()) {
+            if (channelSink != null) {
+                channelSink?.invokeMethod(
+                    "onTelegramMessageReceived",
+                    mapOf("chatId" to tgChatId, "text" to tgText)
+                )
+            } else {
+                pendingTelegramMessage = mapOf("chatId" to tgChatId, "text" to tgText)
             }
         }
     }
@@ -119,6 +137,7 @@ class MainActivity : FlutterActivity() {
         var currentActivity: MainActivity? = null
         var pendingFilePickerResult: MethodChannel.Result? = null
         var pendingRoutineId: String? = null
+        var pendingTelegramMessage: Map<String, String>? = null
         const val FILE_PICKER_REQUEST_CODE = 4123
 
         fun registerAccessibilityChannel(flutterEngine: FlutterEngine, context: android.content.Context) {
@@ -129,6 +148,12 @@ class MainActivity : FlutterActivity() {
             pendingRoutineId?.let { rId ->
                 channel.invokeMethod("onRoutineTriggered", mapOf("routine_id" to rId))
                 pendingRoutineId = null
+            }
+
+            // If a telegram message launched the activity from background, deliver it now
+            pendingTelegramMessage?.let { tgMsg ->
+                channel.invokeMethod("onTelegramMessageReceived", tgMsg)
+                pendingTelegramMessage = null
             }
 
             channel.setMethodCallHandler { call, result ->
@@ -386,6 +411,22 @@ class MainActivity : FlutterActivity() {
                             val rId = pendingRoutineId
                             pendingRoutineId = null
                             result.success(rId)
+                        }
+
+                        "getPendingTelegramMessage" -> {
+                            val msg = pendingTelegramMessage
+                            pendingTelegramMessage = null
+                            result.success(msg)
+                        }
+
+                        "reloadTelegramPoller" -> {
+                            MacroForegroundService.reloadTelegramPoller()
+                            result.success(true)
+                        }
+
+                        "moveTaskToBack" -> {
+                            currentActivity?.moveTaskToBack(true)
+                            result.success(true)
                         }
 
                         "lockScreen" -> {

@@ -528,7 +528,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          ScreenAutomationService().moveTaskToBack();
+        }
+      },
+      child: Scaffold(
       backgroundColor: isDark
           ? const Color(0xFF0C0A15)
           : const Color(0xFFFFFFFF),
@@ -785,7 +792,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
-    );
+    ));
   }
 
   Widget _buildDrawer(BuildContext context, bool isDark) {

@@ -27,6 +27,9 @@ class RoutineSchedulerService {
   /// Callback to cancel execution
   VoidCallback? onCancelExecutionCallback;
 
+  /// Callback when a Telegram message is received natively
+  void Function(String chatId, String text)? onTelegramMessageCallback;
+
   bool get isRoutineRunning => _isRoutineRunning;
   String? get activeRunningRoutineId => _activeRunningRoutineId;
 
@@ -53,6 +56,13 @@ class RoutineSchedulerService {
           break;
         case 'onBackgroundServiceStopped':
           debugPrint('Background service stopped by user notification action');
+          break;
+        case 'onTelegramMessageReceived':
+          final chatId = call.arguments['chatId'] as String? ?? '';
+          final text = call.arguments['text'] as String? ?? '';
+          if (chatId.isNotEmpty && text.isNotEmpty) {
+            onTelegramMessageCallback?.call(chatId, text);
+          }
           break;
       }
     });

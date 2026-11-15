@@ -481,4 +481,32 @@ class ScreenAutomationService {
       return null;
     }
   }
+
+  /// Query any telegram message that triggered activity launch while locked/backgrounded
+  Future<Map<String, String>?> getPendingTelegramMessage() async {
+    try {
+      final res = await _channel.invokeMapMethod<String, String>('getPendingTelegramMessage');
+      return res;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Signal native service to reload Telegram poller configuration
+  Future<bool> reloadTelegramPoller() async {
+    try {
+      return await _channel.invokeMethod<bool>('reloadTelegramPoller') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Move task to background without destroying the activity
+  Future<bool> moveTaskToBack() async {
+    try {
+      return await _channel.invokeMethod<bool>('moveTaskToBack') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
 }

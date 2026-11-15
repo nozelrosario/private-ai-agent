@@ -50,8 +50,23 @@ class TelegramService {
     _isEnabled = prefs.getBool('telegram_enabled') ?? false;
     _lastActiveChatId = prefs.getString('telegram_last_chat_id');
 
+    // Wire native Telegram message receiver from persistent background service
+    RoutineSchedulerService().onTelegramMessageCallback = (chatId, text) {
+      _handleIncomingMessage(chatId, text);
+    };
+
+    // Check if cold start was triggered by an incoming telegram message while locked
+    final pendingMsg = await ScreenAutomationService().getPendingTelegramMessage();
+    if (pendingMsg != null) {
+      final cId = pendingMsg['chatId'];
+      final msgText = pendingMsg['text'];
+      if (cId != null && msgText != null && cId.isNotEmpty && msgText.isNotEmpty) {
+        unawaited(_handleIncomingMessage(cId, msgText));
+      }
+    }
+
     if (_isEnabled && _botToken.isNotEmpty) {
-      startPolling();
+      await startPolling();
     }
   }
 
@@ -73,22 +88,30 @@ class TelegramService {
     }
 
     if (_isEnabled && _botToken.isNotEmpty) {
-      startPolling();
+      await startPolling();
     } else {
       stopPolling();
     }
+    await ScreenAutomationService().reloadTelegramPoller();
   }
 
-  void startPolling() {
+  Future<void> startPolling() async {
     if (_isPolling) return;
     _isPolling = true;
-    ScreenAutomationService().startBackgroundService();
-    _pollUpdates();
+    await ScreenAutomationService().startBackgroundService();
+    await ScreenAutomationService().reloadTelegramPoller();
+
+    // Fallback Dart polling if native background service is not yet running
+    final bgRunning = await ScreenAutomationService().isBackgroundServiceRunning();
+    if (!bgRunning) {
+      _pollUpdates();
+    }
   }
 
   void stopPolling() {
     _isPolling = false;
     _pollingTimer?.cancel();
+    ScreenAutomationService().reloadTelegramPoller();
   }
 
   Future<void> _pollUpdates() async {
@@ -101,10 +124,10 @@ class TelegramService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'offset': _lastUpdateId + 1,
-          'timeout': 30, // Long polling timeout
+          'timeout': 15, // Short long-poll timeout
           'allowed_updates': ['message'],
         }),
-      );
+      ).timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -227,16 +250,35 @@ class TelegramService {
       final action = _aiService.parseAction(aiResponse);
 
       if (action != null) {
-        // 3. Execute the action
-        final result = await _actionHandler.execute(
-          action,
-          aiService: _aiService,
-          onProgress: (msg) {
-            // Send progress updates back to telegram
-            _sendMessage(chatId, '⏳ $msg');
-          },
-        );
-        await _sendMessage(chatId, '✅ ${result.details ?? "Done"}');
+        final screenService = ScreenAutomationService();
+        bool wasLockedInitially = false;
+        try {
+          wasLockedInitially = await screenService.isKeyguardLocked();
+          final isInteractive = await screenService.isScreenInteractive();
+          if (!isInteractive || wasLockedInitially) {
+            await screenService.wakeScreen();
+            await Future.delayed(const Duration(milliseconds: 1000));
+          }
+
+          // 3. Execute the action
+          final result = await _actionHandler.execute(
+            action,
+            aiService: _aiService,
+            onProgress: (msg) {
+              // Send progress updates back to telegram
+              _sendMessage(chatId, '⏳ $msg');
+            },
+          );
+          await _sendMessage(chatId, '✅ ${result.details ?? "Done"}');
+        } finally {
+          if (wasLockedInitially) {
+            try {
+              await screenService.pressHome();
+              await Future.delayed(const Duration(milliseconds: 1000));
+              await screenService.lockScreen();
+            } catch (_) {}
+          }
+        }
       } else {
         // It's a plain text response
         await _sendMessage(chatId, '💬 $aiResponse');
