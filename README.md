@@ -20,7 +20,8 @@ The system operates on a continuous feedback loop:
 - **Agent Personas:** Scope skills to specialized personas (e.g., *Personal Assistant*, *Device Operator*, *Media Specialist*) with tailored system prompts to eliminate ambiguity.
 - **Teach Mode (by Demonstration):** Interactively record on-screen taps, scrolls, and keystrokes directly on your device to create custom skills automatically.
 - **Confirmation Checkpoints:** Enforce security on sensitive steps (payments, data changes, outgoing messages) requiring explicit user confirmation before proceeding.
-- **Remote Access:** Integrates with the Telegram Bot API via background polling, allowing users to issue commands and monitor task execution progress remotely.
+- **Autonomous Routines & Background Scheduler:** Schedule periodic, unattended multi-step AI loops (e.g. checking WhatsApp messages and auto-replying based on persona tone) with strict safety bounds, anti-loop deduplication ledger, and native Android `AlarmManager` wakeups.
+- **Remote Access:** Integrates with the Telegram Bot API via background polling, allowing users to issue commands, run routines, approve checkpoints, and monitor task execution progress remotely.
 - **Voice Control:** Native speech-to-text integration for hands-free operation.
 
 ## Custom Skills, Personas & Teach Mode
@@ -49,6 +50,15 @@ PrivateAgent includes modular automation tools designed to make device control f
 - **Interactive Visual Composer:** Effortlessly assemble multi-step automation recipes with visual action cards (App Launcher, UI Element Tap, Coordinate Tap, Text Input, Wait/Delay, Scroll Direction, Key Press) and dynamic parameter variable chips.
 - **Bi-directional JSON Synchronization:** Switch tabs in real-time between visual forms and formatted JSON code. Power users can inspect, edit, or paste complete recipes and agent personas directly.
 - **In-Settings Management & Backup:** Select active personas, launch creation studios, and perform full JSON catalog backups/imports directly from the Settings screen.
+
+### 6. Autonomous Routines & Background Scheduler (Controlled AI Loops)
+- **Periodic Automation Loops:** Schedule autonomous multi-step goals (e.g., checking WhatsApp for unread messages, reading context, and drafting/sending auto-replies).
+- **Dual-Stage Success Evaluator:** Actions iterate until a dedicated LLM evaluation auditor verifies that the screen state fulfills the routine's explicit `successCriteria`.
+- **Anti-Looping Run Ledger:** Employs deterministic FNV-1a hashing and local ledger tracking to prevent duplicate auto-replies across periodic cycles.
+- **Active-User Touch Gating:** Automatically detects if the user is actively using the device and defers routine execution by 5 minutes rather than stealing focus.
+- **Unattended Lock Lifecycle:** Wakes locked screens, executes pre-execution unlock skills, and automatically re-locks the device upon completion if it was locked initially.
+- **Battery-Friendly Android Alarms:** Uses `AlarmManager.setExactAndAllowWhileIdle()` to sleep with zero idle battery drain, raising a transient Foreground Service with a 1-tap **Emergency Stop** notification while running.
+- **Supervised vs Autonomous Modes:** Choose between full auto-reply or supervised approval checkpoints requiring explicit confirmation before outgoing messages are sent.
 
 ## Installation
 
@@ -102,6 +112,13 @@ To enable remote access:
 1. Acquire a bot token from BotFather on Telegram.
 2. Input the token in the PrivateAgent Settings screen and enable the integration toggle.
 3. The application will maintain a background polling connection to the Telegram API to receive commands.
+
+### Supported Remote Commands:
+- Natural language instructions (e.g., `"Open Spotify and play my playlist"`, `"Send SMS to John saying I'm on my way"`).
+- `/macros` or `/routines`: List all configured autonomous routines, schedules, and last execution statuses.
+- `/run <name>`: Force run an autonomous routine immediately.
+- `/stop`: Emergency stop for any running routine or task.
+- Interactive Checkpoints: Reply `YES` to approve or `NO` to reject outgoing messages when routines run in Supervised mode.
 
 ## License
 
