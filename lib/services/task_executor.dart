@@ -1156,14 +1156,22 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
         continue;
       }
 
-      final action = _parseAction(response);
-      if (action == null) {
-        results.add('Failed to parse AI action');
+      Map<String, dynamic>? actionJson;
+      try {
+        final jsonStr = _extractJson(response);
+        actionJson = jsonDecode(jsonStr) as Map<String, dynamic>;
+      } catch (e) {
+        results.add('Failed to parse AI action: $e');
         consecutiveFailures++;
         continue;
       }
 
-      if (action.action == 'done') {
+      final action = actionJson['action'] as String? ?? '';
+      final params = (actionJson['params'] as Map<String, dynamic>?) ?? {};
+      final isComplete = actionJson['is_complete'] as bool? ?? false;
+      final reasoning = actionJson['reasoning'] as String? ?? '';
+
+      if (action == 'done' || isComplete) {
         _report('Routine signaled done.');
         results.add('Routine completed.');
         await TaskHistoryLogger.logTask(
@@ -1177,8 +1185,8 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
       }
 
       // Check Supervised approval gate if typing text / sending message
-      if (action.action == 'type_text') {
-        final textToType = action.params['text'] as String? ?? '';
+      if (action == 'type_text') {
+        final textToType = params['text'] as String? ?? '';
         if (routine.executionMode == RoutineExecutionMode.supervised &&
             onConfirmationRequired != null) {
           _report('Supervised approval requested: "$textToType"');
@@ -1193,17 +1201,16 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
       }
 
       // Execute action
-      _report(
-          'Action (${step + 1}/$maxSteps): ${action.action} ${action.params}');
-      final success = await _executeAction(action);
+      _report('Action (${step + 1}/$maxSteps): $action $params');
+      final success = await _executeActionCommand(action, params);
 
       if (success) {
-        results.add('${action.action}: success');
+        results.add('$action: success');
         consecutiveFailures = 0;
 
         // Record message in ledger if typing text
-        if (action.action == 'type_text') {
-          final sentText = action.params['text'] as String? ?? '';
+        if (action == 'type_text') {
+          final sentText = params['text'] as String? ?? '';
           if (sentText.isNotEmpty) {
             unawaited(RoutineLedgerService().recordEntry(
               routineId: routine.id,
@@ -1216,20 +1223,20 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
           }
         }
       } else {
-        results.add('${action.action}: failed');
+        results.add('$action: failed');
         consecutiveFailures++;
       }
 
-      if (action.action == lastAction) {
+      if (action == lastAction) {
         sameActionCount++;
         if (sameActionCount >= 3) {
-          results.add('Loop detected: repeated ${action.action} 3 times.');
+          results.add('Loop detected: repeated $action 3 times.');
           await _screenService.pressBack();
           sameActionCount = 0;
         }
       } else {
         sameActionCount = 1;
-        lastAction = action.action;
+        lastAction = action;
       }
     }
 
@@ -1243,5 +1250,58 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
       results,
     );
     return 'Max steps reached.';
+  }
+
+  Future<bool> _executeActionCommand(
+    String action,
+    Map<String, dynamic> params,
+  ) async {
+    switch (action) {
+      case 'click_text':
+        final text = params['text'] as String? ?? '';
+        return await _screenService.clickByText(text);
+
+      case 'click_at':
+        final x = (params['x'] as num?)?.toDouble() ?? 0;
+        final y = (params['y'] as num?)?.toDouble() ?? 0;
+        return await _screenService.clickAt(x, y);
+
+      case 'type_text':
+        final text = params['text'] as String? ?? '';
+        final hint = params['field_hint'] as String?;
+        return await _screenService.typeText(text, fieldHint: hint);
+
+      case 'press_enter':
+        return await _submitKeyboardAction();
+
+      case 'swipe':
+        final startX = (params['startX'] as num?)?.toDouble() ?? 540;
+        final startY = (params['startY'] as num?)?.toDouble() ?? 2000;
+        final endX = (params['endX'] as num?)?.toDouble() ?? 540;
+        final endY = (params['endY'] as num?)?.toDouble() ?? 500;
+        return await _performSwipe(startX, startY, endX, endY);
+
+      case 'scroll':
+        final direction = params['direction'] as String? ?? 'down';
+        return await _performScroll(direction);
+
+      case 'press_back':
+        return await _screenService.pressBack();
+
+      case 'press_home':
+        return await _screenService.pressHome();
+
+      case 'open_app':
+        final appName = params['app_name'] as String? ?? '';
+        final res = await _appLauncher.openApp(appName);
+        return res.startsWith('Opened');
+
+      case 'wait':
+        await Future.delayed(const Duration(seconds: 1));
+        return true;
+
+      default:
+        return false;
+    }
   }
 }

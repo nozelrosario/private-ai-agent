@@ -79,15 +79,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _telegramService.init();
     await _actionHandler.shizuku.checkAvailability();
 
+    TaskExecutor? activeRoutineExecutor;
     await RoutineSchedulerService().init(
       onExecuteRoutine: (routine, {wasLockedInitially = false}) async {
-        final executor = TaskExecutor(
+        activeRoutineExecutor = TaskExecutor(
           aiService: _aiService,
           screenService: ScreenAutomationService(),
           appLauncher: AppLauncherService(),
           shizukuService: _actionHandler.shizuku,
           onProgress: (msg) {
-            _reportProgress(msg);
+            developer.log('Routine progress: $msg', name: 'PrivateAgent');
           },
           onConfirmationRequired: (prompt) async {
             if (_telegramService.isEnabled) {
@@ -96,13 +97,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             return true;
           },
         );
-        return await executor.executeAutonomousRoutine(
+        return await activeRoutineExecutor!.executeAutonomousRoutine(
           routine,
           wasLockedInitially: wasLockedInitially,
         );
       },
       onCancelExecution: () {
-        _taskExecutor?.cancel();
+        activeRoutineExecutor?.cancel();
       },
     );
 
