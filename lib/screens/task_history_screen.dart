@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../services/task_history_logger.dart';
 
@@ -202,27 +204,33 @@ class _TaskHistoryScreenState extends State<TaskHistoryScreen> {
                                         ],
                                       ),
                                       const SizedBox(height: 20),
-                                      const Text(
-                                        'Execution Trace:',
-                                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      ...((task['trace'] as List<dynamic>?) ?? []).map((t) => Container(
-                                        margin: const EdgeInsets.only(bottom: 6),
-                                        padding: const EdgeInsets.all(10),
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          '• $t',
-                                          style: TextStyle(
-                                            fontFamily: 'monospace',
-                                            fontSize: 12,
-                                            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.85),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            'Execution Trace (${((task['trace'] as List<dynamic>?) ?? []).length}):',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                                           ),
-                                        ),
-                                      )),
+                                          const Spacer(),
+                                          TextButton.icon(
+                                            style: TextButton.styleFrom(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              minimumSize: Size.zero,
+                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                            ),
+                                            icon: const Icon(Icons.copy_rounded, size: 13),
+                                            label: const Text('Copy Trace', style: TextStyle(fontSize: 11)),
+                                            onPressed: () {
+                                              final traceJson = const JsonEncoder.withIndent('  ').convert(task['trace'] ?? []);
+                                              Clipboard.setData(ClipboardData(text: traceJson));
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(content: Text('Execution trace copied to clipboard!')),
+                                              );
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      ...((task['trace'] as List<dynamic>?) ?? []).map((t) => _buildTraceItem(context, t)),
                                     ],
                                   ),
                                 ),
@@ -235,6 +243,231 @@ class _TaskHistoryScreenState extends State<TaskHistoryScreen> {
                   ],
                 ),
     );
+  }
+
+  Widget _buildTraceItem(BuildContext context, dynamic item) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    if (item is Map<String, dynamic> && item.containsKey('step')) {
+      final stepNum = item['step'];
+      final action = item['action'] as String? ?? 'action';
+      final reasoning = (item['reasoning'] ?? item['intent'] ?? '') as String;
+      final params = (item['params'] as Map<String, dynamic>?) ?? {};
+      final result = (item['result'] ?? '') as String;
+      final status = (item['status'] ?? 'success') as String;
+      final isSuccess = status == 'success' || status == 'approved';
+
+      final Color statusColor = isSuccess ? Colors.green : Colors.red;
+      final IconData actionIcon = _getActionIcon(action);
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSuccess
+                ? Colors.green.withOpacity(0.2)
+                : Colors.red.withOpacity(0.25),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'STEP $stepNum',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: Theme.of(context).colorScheme.primary,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(actionIcon, size: 12, color: isDark ? Colors.white70 : Colors.black87),
+                        const SizedBox(width: 4),
+                        Text(
+                          action.replaceAll('_', ' ').toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white70 : Colors.black87,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isSuccess ? Icons.check_circle_outline : Icons.cancel_outlined,
+                          size: 11,
+                          color: statusColor,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          status.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            color: statusColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (reasoning.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('💡 ', style: TextStyle(fontSize: 12)),
+                      Expanded(
+                        child: Text(
+                          reasoning,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (params.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(
+                    'Params: ${_formatParams(params)}',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                    ),
+                  ),
+                ),
+              ],
+              if (result.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(
+                    'Outcome: $result',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: statusColor,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    final text = item is Map<String, dynamic> ? (item['info'] ?? jsonEncode(item)) : item.toString();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, size: 14, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.85),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getActionIcon(String action) {
+    switch (action) {
+      case 'click_text':
+      case 'click_at':
+        return Icons.touch_app;
+      case 'type_text':
+        return Icons.keyboard;
+      case 'press_enter':
+        return Icons.keyboard_return;
+      case 'scroll':
+      case 'swipe':
+        return Icons.swipe;
+      case 'open_app':
+        return Icons.open_in_new;
+      case 'press_back':
+        return Icons.arrow_back;
+      case 'press_home':
+        return Icons.home;
+      case 'evaluator_check':
+        return Icons.fact_check_outlined;
+      case 'supervised_checkpoint':
+        return Icons.security;
+      case 'done':
+        return Icons.check_circle_outline;
+      default:
+        return Icons.play_arrow;
+    }
+  }
+
+  String _formatParams(Map<String, dynamic> params) {
+    if (params.containsKey('text')) return 'text: "${params['text']}"';
+    if (params.containsKey('app_name')) return 'app: "${params['app_name']}"';
+    if (params.containsKey('direction')) return 'direction: ${params['direction']}';
+    return params.toString();
   }
 
   Widget _buildStatColumn(String label, String value, {Color? color, required bool isDark}) {

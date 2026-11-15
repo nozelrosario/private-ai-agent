@@ -395,4 +395,31 @@ class ScreenAutomationService {
       return false;
     }
   }
+
+  /// Opens native document picker to select a JSON file from device storage or SD card.
+  /// Returns the file content as a String, or null if cancelled.
+  Future<String?> pickJsonFile() async {
+    try {
+      final content = await _channel.invokeMethod<String>('pickJsonFile');
+      return content;
+    } catch (e) {
+      developer.log('Failed to pick JSON file: $e', name: 'PrivateAgent');
+      return null;
+    }
+  }
+
+  /// Saves a JSON file to the device's public Downloads directory via MediaStore.
+  /// Returns the relative or absolute saved file path.
+  Future<String?> saveJsonFileToDownloads(String fileName, String content) async {
+    try {
+      final savedPath = await _channel.invokeMethod<String>('saveJsonFileToDownloads', {
+        'fileName': fileName,
+        'content': content,
+      });
+      return savedPath;
+    } catch (e) {
+      developer.log('Failed to save JSON file to Downloads: $e', name: 'PrivateAgent');
+      return null;
+    }
+  }
 }

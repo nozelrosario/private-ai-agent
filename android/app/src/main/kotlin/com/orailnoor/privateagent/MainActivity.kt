@@ -25,6 +25,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        currentActivity = this
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
@@ -47,8 +48,40 @@ class MainActivity : FlutterActivity() {
         registerAccessibilityChannel(flutterEngine, this)
     }
 
+    override fun onDestroy() {
+        if (currentActivity == this) {
+            currentActivity = null
+        }
+        super.onDestroy()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FILE_PICKER_REQUEST_CODE) {
+            val pickerResult = pendingFilePickerResult
+            pendingFilePickerResult = null
+            if (resultCode == RESULT_OK && data?.data != null) {
+                try {
+                    contentResolver.openInputStream(data.data!!)?.use { inputStream ->
+                        val content = inputStream.bufferedReader().use { it.readText() }
+                        pickerResult?.success(content)
+                    } ?: run {
+                        pickerResult?.error("READ_ERROR", "Could not open selected file", null)
+                    }
+                } catch (e: Exception) {
+                    pickerResult?.error("READ_ERROR", e.message, null)
+                }
+            } else {
+                pickerResult?.success(null)
+            }
+        }
+    }
+
     companion object {
         var channelSink: MethodChannel? = null
+        var currentActivity: MainActivity? = null
+        var pendingFilePickerResult: MethodChannel.Result? = null
+        const val FILE_PICKER_REQUEST_CODE = 4123
 
         fun registerAccessibilityChannel(flutterEngine: FlutterEngine, context: android.content.Context) {
             val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
@@ -303,6 +336,71 @@ class MainActivity : FlutterActivity() {
                         "releaseWakeLock" -> {
                             MacroWakeReceiver.releaseWakeLock()
                             result.success(true)
+                        }
+
+                        "pickJsonFile" -> {
+                            val activity = currentActivity
+                            if (activity == null) {
+                                result.error("NO_ACTIVITY", "Cannot pick file without active activity", null)
+                            } else {
+                                pendingFilePickerResult = result
+                                try {
+                                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                        addCategory(Intent.CATEGORY_OPENABLE)
+                                        type = "*/*"
+                                        putExtra(
+                                            Intent.EXTRA_MIME_TYPES,
+                                            arrayOf("application/json", "text/plain", "application/octet-stream")
+                                        )
+                                    }
+                                    activity.startActivityForResult(intent, FILE_PICKER_REQUEST_CODE)
+                                } catch (e: Exception) {
+                                    pendingFilePickerResult = null
+                                    result.error("PICK_ERROR", e.message, null)
+                                }
+                            }
+                        }
+
+                        "saveJsonFileToDownloads" -> {
+                            val fileName = call.argument<String>("fileName") ?: "private_agent_export.json"
+                            val content = call.argument<String>("content") ?: ""
+                            try {
+                                var savedPath = ""
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                    val contentValues = android.content.ContentValues().apply {
+                                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                                        put(
+                                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                                            android.os.Environment.DIRECTORY_DOWNLOADS
+                                        )
+                                    }
+                                    val uri = context.contentResolver.insert(
+                                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                        contentValues
+                                    )
+                                    if (uri != null) {
+                                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                                            outputStream.write(content.toByteArray(Charsets.UTF_8))
+                                        }
+                                        savedPath = "Downloads/$fileName"
+                                    } else {
+                                        throw Exception("Failed to create download URI")
+                                    }
+                                } else {
+                                    val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                                        android.os.Environment.DIRECTORY_DOWNLOADS
+                                    )
+                                    if (!dir.exists()) dir.mkdirs()
+                                    val file = java.io.File(dir, fileName)
+                                    file.writeText(content, Charsets.UTF_8)
+                                    savedPath = file.absolutePath
+                                }
+                                result.success(savedPath)
+                            } catch (e: Exception) {
+                                android.util.Log.e("PrivateAgent", "Failed to save file to downloads", e)
+                                result.error("SAVE_ERROR", e.message, null)
+                            }
                         }
 
                         else -> result.notImplemented()

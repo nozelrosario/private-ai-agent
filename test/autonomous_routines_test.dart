@@ -140,4 +140,43 @@ void main() {
       expect(roundtrip.messageSnippetHash, entry.messageSnippetHash);
     });
   });
+
+  group('Task Execution History Trace & Observability', () {
+    test('Structured trace items serialize and preserve reasoning, action, params, and result', () {
+      final trace = [
+        {
+          'info': 'Starting routine "WhatsApp Check"',
+          'timestamp': '2026-11-15T12:00:00.000Z',
+        },
+        {
+          'step': 1,
+          'action': 'open_app',
+          'params': {'app_name': 'WhatsApp'},
+          'reasoning': 'Opening WhatsApp to check for incoming messages',
+          'result': 'Open app "WhatsApp" succeeded',
+          'status': 'success',
+          'timestamp': '2026-11-15T12:00:03.000Z',
+        },
+        {
+          'step': 2,
+          'action': 'click_text',
+          'params': {'text': 'Alice'},
+          'reasoning': 'Tapping chat with Alice to read unread message',
+          'result': 'Click "Alice" succeeded',
+          'status': 'success',
+          'timestamp': '2026-11-15T12:00:05.000Z',
+        },
+      ];
+
+      final encoded = jsonEncode(trace);
+      final decoded = jsonDecode(encoded) as List<dynamic>;
+
+      expect(decoded.length, 3);
+      final step2 = decoded[2] as Map<String, dynamic>;
+      expect(step2['step'], 2);
+      expect(step2['action'], 'click_text');
+      expect(step2['reasoning'], 'Tapping chat with Alice to read unread message');
+      expect(step2['status'], 'success');
+    });
+  });
 }

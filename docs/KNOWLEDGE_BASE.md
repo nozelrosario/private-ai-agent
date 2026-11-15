@@ -94,7 +94,7 @@ flowchart TD
   - Handles JSON extraction and repair when LLMs generate slightly malformed or markdown-fenced responses.
 - `lib/services/screen_automation_service.dart`:
   - Dart-to-native bridge communicating over `MethodChannel('com.privateagent/accessibility')`.
-  - Methods: `isServiceRunning()`, `openAccessibilitySettings()`, `dumpScreen()`, `takeScreenshot()`, `clickByText()`, `clickAt()`, `typeText()`, `pressEnter()`, `scroll()`, `swipe()`, `pressBack()`, `pressHome()`, `openNotifications()`, `getCurrentPackage()`.
+  - Methods: `isServiceRunning()`, `openAccessibilitySettings()`, `dumpScreen()`, `takeScreenshot()`, `clickByText()`, `clickAt()`, `typeText()`, `pressEnter()`, `scroll()`, `swipe()`, `pressBack()`, `pressHome()`, `openNotifications()`, `getCurrentPackage()`, `pickJsonFile()`, `saveJsonFileToDownloads()`.
   - Includes `getCompressedScreenDescription(task)`: High-efficiency compressor that filters out system bar noise (battery, time, status bars) and tags interactive nodes (`[text]`, `[btn]`, `[toggle]`, `[input]`, `[scroll]`) with coordinate centers to minimize token usage.
 - `lib/services/task_executor.dart`:
   - The brain of autonomous operations. Implements the multi-step perception-cognition-action loop.
@@ -102,7 +102,8 @@ flowchart TD
   - Incorporates adaptive delays (e.g., 3s for cold-starting apps, 2s after typing, 1.5s after clicking, 1s after scrolling).
   - Employs loop detection: blocks repeated submit actions (`press_enter > 2`) and runaway scrolls (`scroll/swipe > 3`).
   - Features immediate task cancellation via `cancel()` and `_cancelCompleter`.
-  - On task completion, persists skills to `SkillMemoryService` and writes execution trace to `TaskHistoryLogger`.
+  - Captures rich structured execution traces (step index, action, parameters, LLM intent and reasoning, evaluator verdicts, outcome status) and persists them to `TaskHistoryLogger`.
+  - On task completion, persists skills to `SkillMemoryService`.
 - `lib/services/action_handler.dart`:
   - Central dispatcher executing single-step actions (`open_app`, `make_call`, `send_sms`, `search_contact`, `set_alarm`, `set_volume`, `set_brightness`, `run_adb_command`, `send_email`, `open_url`) as well as delegating `execute_task` to `TaskExecutor`.
 - `lib/services/recovery_engine.dart`:
@@ -116,11 +117,13 @@ flowchart TD
   - Uses tokenized stop-word removal and Jaccard similarity matching to determine if a new user prompt matches an existing reliable skill.
 - `lib/services/task_history_logger.dart`:
   - Appends execution records (`goal`, `status`, `total_tokens`, `steps_taken`, `trace`, `timestamp`) to `task_history.jsonl`.
+  - Stores rich structured trace maps with action, parameters, reasoning, and status, with backwards compatibility for legacy string traces.
   - Provides query functions and aggregated analytics (success rate, total runs).
 - `lib/services/telegram_service.dart`:
   - Long-polling client communicating with `api.telegram.org/bot<token>/getUpdates`.
   - Receives remote text commands, forwards them through `AiService` and `ActionHandler`, and streams progress updates and completion reports back to the Telegram chat.
   - Supports autonomous routine management commands (`/macros`, `/run <name>`, `/stop`) and interactive confirmation checkpoints.
+  - Dispatches scheduled routine notifications (`notifyRoutineActivity`) when routines are triggered, postponed, or finished.
 - `lib/services/routine_service.dart`:
   - CRUD persistence for `AutonomousRoutine` models in `autonomous_routines.json`.
   - Manages routine lifecycle, consecutive failure counting, and full JSON catalog export/import.
@@ -130,6 +133,7 @@ flowchart TD
 - `lib/services/routine_scheduler_service.dart`:
   - Manages Android exact alarms via `AlarmManager` for battery-efficient wakeups.
   - Implements screen state inspection, active-touch user gating (postponing execution if user is actively using the phone), lockscreen wake/unlock sequences, and lock restoration.
+  - Emits Telegram notifications when scheduled routines are triggered, deferred, or completed.
 - `lib/services/voice_service.dart`:
   - Wraps `speech_to_text` and `flutter_tts` for bidirectional voice conversations.
 - `lib/services/app_launcher_service.dart`:

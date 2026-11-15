@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../models/autonomous_routine.dart';
 import 'routine_service.dart';
 import 'screen_automation_service.dart';
+import 'telegram_service.dart';
 
 class RoutineSchedulerService {
   static final RoutineSchedulerService _instance =
@@ -168,6 +169,11 @@ class RoutineSchedulerService {
           status: 'postponed',
           failureReason: 'Postponed due to active user interaction',
         );
+        unawaited(TelegramService.notifyRoutineActivity(
+          routineName: routine.name,
+          event: 'postponed',
+          reason: 'User is actively interacting with the device',
+        ));
         // Postpone for 5 minutes
         await _channel.invokeMethod('scheduleRoutineAlarm', {
           'routineId': routine.id,
@@ -175,6 +181,15 @@ class RoutineSchedulerService {
         });
         return 'Postponed';
       }
+    }
+
+    // Notify Telegram about routine being triggered by schedule
+    if (!isManual) {
+      unawaited(TelegramService.notifyRoutineActivity(
+        routineName: routine.name,
+        event: 'triggered',
+        goalPrompt: routine.goalPrompt,
+      ));
     }
 
     _isRoutineRunning = true;
@@ -218,6 +233,14 @@ class RoutineSchedulerService {
         failureReason: isSuccess ? null : result,
       );
 
+      if (!isManual) {
+        unawaited(TelegramService.notifyRoutineActivity(
+          routineName: routine.name,
+          event: isSuccess ? 'completed' : 'failed',
+          result: result,
+        ));
+      }
+
       return result;
     } catch (e) {
       debugPrint('Error executing routine ${routine.name}: $e');
@@ -226,6 +249,13 @@ class RoutineSchedulerService {
         status: 'failed',
         failureReason: e.toString(),
       );
+      if (!isManual) {
+        unawaited(TelegramService.notifyRoutineActivity(
+          routineName: routine.name,
+          event: 'failed',
+          reason: e.toString(),
+        ));
+      }
       return 'Error: $e';
     } finally {
       // 6. Security restoration: re-lock if originally locked

@@ -59,6 +59,9 @@ PrivateAgent includes modular automation tools designed to make device control f
 - **Unattended Lock Lifecycle:** Wakes locked screens, executes pre-execution unlock skills, and automatically re-locks the device upon completion if it was locked initially.
 - **Battery-Friendly Android Alarms:** Uses `AlarmManager.setExactAndAllowWhileIdle()` to sleep with zero idle battery drain, raising a transient Foreground Service with a 1-tap **Emergency Stop** notification while running.
 - **Supervised vs Autonomous Modes:** Choose between full auto-reply or supervised approval checkpoints requiring explicit confirmation before outgoing messages are sent.
+- **Telegram Routine Activity Notifications:** Automatically dispatches alerts to your Telegram chat when scheduled routines are triggered, postponed, or finished with execution outcomes.
+- **Rich Intent & Reasoning Execution History:** Tapping any task in History displays interactive timeline cards with the LLM's intent, reasoning, action parameters, and evaluator verdicts, plus a 1-tap "Copy Trace" export for prompt tweaking.
+- **Direct Storage Import & Export:** Export and import skills, personas, and routines directly as `.json` files to/from device storage, SD card, or Downloads using native Android SAF and MediaStore APIs.
 
 ## Installation
 

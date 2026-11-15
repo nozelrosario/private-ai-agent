@@ -24,6 +24,7 @@ class TelegramService {
 
   String get botToken => _botToken;
   bool get isEnabled => _isEnabled;
+  String? get lastActiveChatId => _lastActiveChatId;
 
   /// Request approval from user via Telegram for supervised checkpoint actions
   Future<bool> requestConfirmation(String prompt) async {
@@ -46,18 +47,29 @@ class TelegramService {
     final prefs = await SharedPreferences.getInstance();
     _botToken = prefs.getString('telegram_bot_token') ?? '';
     _isEnabled = prefs.getBool('telegram_enabled') ?? false;
+    _lastActiveChatId = prefs.getString('telegram_last_chat_id');
 
     if (_isEnabled && _botToken.isNotEmpty) {
       startPolling();
     }
   }
 
-  Future<void> saveSettings({required String botToken, required bool isEnabled}) async {
+  Future<void> saveSettings({
+    required String botToken,
+    required bool isEnabled,
+    String? chatId,
+  }) async {
     _botToken = botToken;
     _isEnabled = isEnabled;
+    if (chatId != null && chatId.isNotEmpty) {
+      _lastActiveChatId = chatId;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('telegram_bot_token', _botToken);
     await prefs.setBool('telegram_enabled', _isEnabled);
+    if (_lastActiveChatId != null) {
+      await prefs.setString('telegram_last_chat_id', _lastActiveChatId!);
+    }
 
     if (_isEnabled && _botToken.isNotEmpty) {
       startPolling();
@@ -120,6 +132,8 @@ class TelegramService {
 
   Future<void> _handleIncomingMessage(String chatId, String text) async {
     _lastActiveChatId = chatId;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('telegram_last_chat_id', chatId);
     final trimmed = text.trim();
 
     // Check if answering a pending supervised confirmation checkpoint
@@ -244,6 +258,66 @@ class TelegramService {
       );
     } catch (e) {
       print('Failed to send telegram message: $e');
+    }
+  }
+
+  /// Notify the user via Telegram about autonomous routine activities
+  static Future<void> notifyRoutineActivity({
+    required String routineName,
+    required String event, // 'triggered', 'postponed', 'completed', 'failed'
+    String? goalPrompt,
+    String? reason,
+    String? result,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isEnabled = prefs.getBool('telegram_enabled') ?? false;
+      final botToken = prefs.getString('telegram_bot_token') ?? '';
+      final chatId = prefs.getString('telegram_last_chat_id');
+
+      if (!isEnabled || botToken.isEmpty || chatId == null || chatId.isEmpty) {
+        return;
+      }
+
+      String message;
+      switch (event) {
+        case 'triggered':
+          message = '⏰ Scheduled Routine Triggered\n\n'
+              '📌 Routine: $routineName\n'
+              '🎯 Goal: ${goalPrompt ?? "Autonomous routine"}\n'
+              '⏳ Status: Executing in background...';
+          break;
+        case 'postponed':
+          message = '⏳ Scheduled Routine Postponed\n\n'
+              '📌 Routine: $routineName\n'
+              '⚠️ Reason: ${reason ?? "User is actively using the screen."}\n'
+              '🔁 Will retry in 5 minutes.';
+          break;
+        case 'completed':
+          message = '✅ Scheduled Routine Completed\n\n'
+              '📌 Routine: $routineName\n'
+              '🏁 Result: ${result ?? "Done."}';
+          break;
+        case 'failed':
+          message = '❌ Scheduled Routine Failed\n\n'
+              '📌 Routine: $routineName\n'
+              '⚠️ Details: ${reason ?? result ?? "Routine did not complete."}';
+          break;
+        default:
+          message = '🤖 Routine Update: $routineName ($event)';
+      }
+
+      final url = Uri.parse('https://api.telegram.org/bot$botToken/sendMessage');
+      await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'chat_id': chatId,
+          'text': message,
+        }),
+      );
+    } catch (e) {
+      print('Failed to send Telegram routine notification: $e');
     }
   }
 

@@ -1,5 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/agent_persona.dart';
 import '../models/custom_skill.dart';
 import '../models/autonomous_routine.dart';
@@ -7,6 +10,7 @@ import '../services/custom_skill_service.dart';
 import '../services/persona_service.dart';
 import '../services/routine_service.dart';
 import '../services/routine_scheduler_service.dart';
+import '../services/screen_automation_service.dart';
 import 'skill_editor_screen.dart';
 import 'persona_editor_screen.dart';
 import 'routine_editor_screen.dart';
@@ -27,6 +31,7 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
   final PersonaService _personaService = PersonaService();
   final RoutineService _routineService = RoutineService();
   final RoutineSchedulerService _schedulerService = RoutineSchedulerService();
+  final ScreenAutomationService _screenService = ScreenAutomationService();
 
   List<AgentPersona> _personas = [];
   List<CustomSkill> _skills = [];
@@ -109,21 +114,99 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
     ).then((_) => _loadData());
   }
 
-  // --- SKILLS EXPORT / IMPORT JSON ---
-  void _showExportDialog() {
-    final jsonStr = _skillService.exportSkillsJson();
+  // --- UNIFIED CATALOG EXPORT / IMPORT (FILE & CLIPBOARD) ---
+  void _showCatalogExportDialog({
+    required String title,
+    required String defaultFileName,
+    required String jsonStr,
+  }) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Export Skills Catalog (JSON)'),
+        title: Text(title),
         content: SizedBox(
           width: double.maxFinite,
-          height: 300,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              jsonStr,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            ),
+          height: 320,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      jsonStr,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  FilledButton.icon(
+                    onPressed: () async {
+                      final path = await _screenService.saveJsonFileToDownloads(
+                        defaultFileName,
+                        jsonStr,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(path != null
+                                ? 'Exported file to: $path'
+                                : 'Failed to save file to Downloads'),
+                          ),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.download_rounded, size: 16),
+                    label: const Text('Save to Downloads'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      try {
+                        final tempDir = await getTemporaryDirectory();
+                        final tempFile = File('${tempDir.path}/$defaultFileName');
+                        await tempFile.writeAsString(jsonStr);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        await Share.shareXFiles(
+                          [XFile(tempFile.path, mimeType: 'application/json')],
+                          text: 'PrivateAgent Export: $defaultFileName',
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Share failed: $e')),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.share_rounded, size: 16),
+                    label: const Text('Share File'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: jsonStr));
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('JSON copied to clipboard!')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded, size: 16),
+                    label: const Text('Copy JSON'),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
         actions: [
@@ -131,37 +214,76 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Close'),
           ),
-          FilledButton.icon(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: jsonStr));
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Skills JSON copied to clipboard!')),
-              );
-            },
-            icon: const Icon(Icons.copy_rounded, size: 16),
-            label: const Text('Copy JSON'),
-          ),
         ],
       ),
     );
   }
 
-  void _showImportDialog() {
+  void _showCatalogImportDialog({
+    required String title,
+    required String hintText,
+    required Future<int> Function(String jsonStr) onImport,
+  }) {
     final inputCtrl = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Import Skills from JSON'),
+        title: Text(title),
         content: SizedBox(
           width: double.maxFinite,
-          child: TextField(
-            controller: inputCtrl,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              hintText: 'Paste skills JSON array here...',
-              border: OutlineInputBorder(),
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.icon(
+                onPressed: () async {
+                  try {
+                    final content = await _screenService.pickJsonFile();
+                    if (content == null || content.isEmpty) return;
+                    final count = await onImport(content);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    await _loadData();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Successfully imported $count items from file!'),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Import error: $e')),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.folder_open_rounded, size: 18),
+                label: const Text('Pick File from Device / SD Card'),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Row(
+                  children: [
+                    Expanded(child: Divider()),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8.0),
+                      child: Text('OR PASTE JSON', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    ),
+                    Expanded(child: Divider()),
+                  ],
+                ),
+              ),
+              TextField(
+                controller: inputCtrl,
+                maxLines: 6,
+                decoration: InputDecoration(
+                  hintText: hintText,
+                  border: const OutlineInputBorder(),
+                  contentPadding: const EdgeInsets.all(10),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -171,93 +293,63 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
           ),
           FilledButton(
             onPressed: () async {
-              final count = await _skillService.importSkillsJson(inputCtrl.text.trim());
-              Navigator.pop(ctx);
-              await _loadData();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Successfully imported $count skills!')),
-              );
+              final text = inputCtrl.text.trim();
+              if (text.isEmpty) return;
+              try {
+                final count = await onImport(text);
+                if (ctx.mounted) Navigator.pop(ctx);
+                await _loadData();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Successfully imported $count items!')),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Import error: $e')),
+                  );
+                }
+              }
             },
-            child: const Text('Import'),
+            child: const Text('Import Text'),
           ),
         ],
       ),
+    );
+  }
+
+  // --- SKILLS EXPORT / IMPORT JSON ---
+  void _showExportDialog() {
+    _showCatalogExportDialog(
+      title: 'Export Skills Catalog',
+      defaultFileName: 'privateagent_skills_${DateTime.now().millisecondsSinceEpoch}.json',
+      jsonStr: _skillService.exportSkillsJson(),
+    );
+  }
+
+  void _showImportDialog() {
+    _showCatalogImportDialog(
+      title: 'Import Skills from JSON',
+      hintText: 'Paste skills JSON array here...',
+      onImport: (content) => _skillService.importSkillsJson(content.trim()),
     );
   }
 
   // --- PERSONAS EXPORT / IMPORT JSON ---
   void _showPersonaExportDialog() {
-    final jsonStr = _personaService.exportPersonasJson();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Export Personas (JSON)'),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: 300,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              jsonStr,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          FilledButton.icon(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: jsonStr));
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Personas JSON copied to clipboard!')),
-              );
-            },
-            icon: const Icon(Icons.copy_rounded, size: 16),
-            label: const Text('Copy JSON'),
-          ),
-        ],
-      ),
+    _showCatalogExportDialog(
+      title: 'Export Personas Catalog',
+      defaultFileName: 'privateagent_personas_${DateTime.now().millisecondsSinceEpoch}.json',
+      jsonStr: _personaService.exportPersonasJson(),
     );
   }
 
   void _showPersonaImportDialog() {
-    final inputCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Personas from JSON'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: TextField(
-            controller: inputCtrl,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              hintText: 'Paste personas JSON array here...',
-              border: OutlineInputBorder(),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final count = await _personaService.importPersonasJson(inputCtrl.text.trim());
-              Navigator.pop(ctx);
-              await _loadData();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Successfully imported $count personas!')),
-              );
-            },
-            child: const Text('Import'),
-          ),
-        ],
-      ),
+    _showCatalogImportDialog(
+      title: 'Import Personas from JSON',
+      hintText: 'Paste personas JSON array here...',
+      onImport: (content) => _personaService.importPersonasJson(content.trim()),
     );
   }
 
@@ -664,75 +756,22 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
   }
 
   void _showRoutineExportDialog() {
-    final jsonStr = _routineService.exportCatalogJson();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Export Routines JSON'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              jsonStr,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: jsonStr));
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Copied routines JSON to clipboard')),
-              );
-            },
-            child: const Text('Copy to Clipboard'),
-          ),
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-        ],
-      ),
+    _showCatalogExportDialog(
+      title: 'Export Routines Catalog',
+      defaultFileName: 'privateagent_routines_${DateTime.now().millisecondsSinceEpoch}.json',
+      jsonStr: _routineService.exportCatalogJson(),
     );
   }
 
   void _showRoutineImportDialog() {
-    final textController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Routines JSON'),
-        content: TextField(
-          controller: textController,
-          maxLines: 10,
-          decoration: const InputDecoration(
-            hintText: 'Paste routines JSON array here...',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              try {
-                final count = await _routineService.importCatalogJson(textController.text);
-                await _schedulerService.syncAllSchedules();
-                await _loadData();
-                if (mounted) {
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Successfully imported $count routines')),
-                  );
-                }
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Import failed: $e')),
-                );
-              }
-            },
-            child: const Text('Import'),
-          ),
-        ],
-      ),
+    _showCatalogImportDialog(
+      title: 'Import Routines from JSON',
+      hintText: 'Paste routines JSON array here...',
+      onImport: (content) async {
+        final count = await _routineService.importCatalogJson(content.trim());
+        await _schedulerService.syncAllSchedules();
+        return count;
+      },
     );
   }
 
