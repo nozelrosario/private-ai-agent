@@ -148,6 +148,18 @@ Rules:
     });
     _report('Starting task: $userGoal');
 
+    // Wake and dismiss keyguard if device is currently locked or asleep
+    final isInteractiveInitially = await _screenService.isScreenInteractive();
+    final isLockedInitially = await _screenService.isKeyguardLocked();
+    if (!isInteractiveInitially || isLockedInitially) {
+      _report('Device is asleep/locked. Waking and requesting keyguard dismissal...');
+      await _screenService.wakeScreen();
+      await _screenService.dismissKeyguard();
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _screenService.swipe(540, 1800, 540, 400);
+      await Future.delayed(const Duration(milliseconds: 1000));
+    }
+
     // Check skill memory first
     final savedSkill = await _skillMemory.findSkill(userGoal);
     if (savedSkill != null && savedSkill.isReliable) {
@@ -258,6 +270,17 @@ Rules:
         );
         await _screenService.showToast('Task Cancelled');
         return 'Task cancelled.';
+      }
+
+      // Verify screen is still active & unlocked mid-execution
+      final isInteractive = await _screenService.isScreenInteractive();
+      final isLocked = await _screenService.isKeyguardLocked();
+      if (!isInteractive || isLocked) {
+        _report('Screen sleep/lock detected mid-execution. Restoring screen...');
+        await _screenService.wakeScreen();
+        await _screenService.dismissKeyguard();
+        await _screenService.swipe(540, 1800, 540, 400);
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
 
       // Adaptive delay: give Android apps time to transition screens, load data, or open keyboards
@@ -1029,21 +1052,30 @@ Has the success criteria been completely met?
     });
 
     // 1. If screen was locked initially, attempt unlock routine
-    if (wasLockedInitially && routine.unlockSkillId != null) {
-      _report(
-          'Screen was locked. Attempting unlock skill: ${routine.unlockSkillId}...');
-      final unlockSkill =
-          CustomSkillService().getSkillById(routine.unlockSkillId!);
-      if (unlockSkill != null && unlockSkill.steps.isNotEmpty) {
-        for (final step in unlockSkill.steps) {
-          if (_cancelled) break;
-          if (step.actionTypeHint == 'click_text' &&
-              step.expectedElementHint != null) {
-            await _screenService.clickByText(step.expectedElementHint!);
-          } else if (step.actionTypeHint == 'swipe') {
-            await _screenService.swipe(540, 1800, 540, 400);
+    if (wasLockedInitially) {
+      _report('Screen was locked. Waking device and requesting keyguard dismissal...');
+      await _screenService.wakeScreen();
+      await _screenService.dismissKeyguard();
+      await Future.delayed(const Duration(milliseconds: 500));
+      // Dispatch swipe up to clear standard swipe lockscreen or reveal credential input
+      await _screenService.swipe(540, 1800, 540, 400);
+      await Future.delayed(const Duration(milliseconds: 1000));
+
+      if (routine.unlockSkillId != null) {
+        _report('Attempting unlock skill: ${routine.unlockSkillId}...');
+        final unlockSkill =
+            CustomSkillService().getSkillById(routine.unlockSkillId!);
+        if (unlockSkill != null && unlockSkill.steps.isNotEmpty) {
+          for (final step in unlockSkill.steps) {
+            if (_cancelled) break;
+            if (step.actionTypeHint == 'click_text' &&
+                step.expectedElementHint != null) {
+              await _screenService.clickByText(step.expectedElementHint!);
+            } else if (step.actionTypeHint == 'swipe') {
+              await _screenService.swipe(540, 1800, 540, 400);
+            }
+            await Future.delayed(const Duration(milliseconds: 1000));
           }
-          await Future.delayed(const Duration(milliseconds: 1000));
         }
       }
       await Future.delayed(const Duration(milliseconds: 1500));
@@ -1112,6 +1144,17 @@ Has the success criteria been completely met?
           executionTrace,
         );
         return 'Routine cancelled.';
+      }
+
+      // Verify screen is still active & unlocked mid-routine
+      final isInteractive = await _screenService.isScreenInteractive();
+      final isLocked = await _screenService.isKeyguardLocked();
+      if (!isInteractive || isLocked) {
+        _report('Screen sleep/lock detected mid-routine. Restoring screen...');
+        await _screenService.wakeScreen();
+        await _screenService.dismissKeyguard();
+        await _screenService.swipe(540, 1800, 540, 400);
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
 
       int delay = 1200;

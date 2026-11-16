@@ -226,6 +226,25 @@ class _RoutineEditorScreenState extends State<RoutineEditorScreen>
     await _routineService.saveRoutine(routine);
     await _schedulerService.scheduleRoutine(routine);
 
+    if (routine.isEnabled && routine.schedule.isEnabled) {
+      final canAlarm = await ScreenAutomationService().canScheduleExactAlarms();
+      if (!canAlarm && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Exact alarm permission needed for precision timing. Please grant in Settings.',
+            ),
+            action: SnackBarAction(
+              label: 'Grant',
+              onPressed: () =>
+                  ScreenAutomationService().requestExactAlarmPermission(),
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Saved routine "${routine.name}"')),

@@ -424,10 +424,16 @@ class ScreenAutomationService {
   }
 
   /// Start persistent 24/7 background listener service
-  Future<bool> startBackgroundService({String? status}) async {
+  Future<bool> startBackgroundService({
+    String? status,
+    String? botToken,
+    bool? telegramEnabled,
+  }) async {
     try {
       return await _channel.invokeMethod<bool>('startBackgroundService', {
         if (status != null) 'status': status,
+        if (botToken != null) 'botToken': botToken,
+        if (telegramEnabled != null) 'telegramEnabled': telegramEnabled,
       }) ?? false;
     } catch (e) {
       developer.log('Failed to start background service: $e', name: 'PrivateAgent');
@@ -493,9 +499,15 @@ class ScreenAutomationService {
   }
 
   /// Signal native service to reload Telegram poller configuration
-  Future<bool> reloadTelegramPoller() async {
+  Future<bool> reloadTelegramPoller({
+    String? botToken,
+    bool? telegramEnabled,
+  }) async {
     try {
-      return await _channel.invokeMethod<bool>('reloadTelegramPoller') ?? false;
+      return await _channel.invokeMethod<bool>('reloadTelegramPoller', {
+        if (botToken != null) 'botToken': botToken,
+        if (telegramEnabled != null) 'telegramEnabled': telegramEnabled,
+      }) ?? false;
     } catch (e) {
       return false;
     }
@@ -505,6 +517,42 @@ class ScreenAutomationService {
   Future<bool> moveTaskToBack() async {
     try {
       return await _channel.invokeMethod<bool>('moveTaskToBack') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Request keyguard dismissal from Android system
+  Future<bool> dismissKeyguard() async {
+    try {
+      return await _channel.invokeMethod<bool>('dismissKeyguard') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if the app is allowed to schedule exact alarms
+  Future<bool> canScheduleExactAlarms() async {
+    try {
+      return await _channel.invokeMethod<bool>('canScheduleExactAlarms') ?? true;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /// Request user permission to schedule exact alarms (Alarms & Reminders)
+  Future<bool> requestExactAlarmPermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestExactAlarmPermission') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Open application details settings (for OEM autostart / high background power)
+  Future<bool> openAppDetailsSettings() async {
+    try {
+      return await _channel.invokeMethod<bool>('openAppDetailsSettings') ?? false;
     } catch (e) {
       return false;
     }

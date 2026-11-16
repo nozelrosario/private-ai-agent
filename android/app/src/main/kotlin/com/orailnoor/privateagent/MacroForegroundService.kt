@@ -37,10 +37,17 @@ class MacroForegroundService : Service() {
 
         private var instance: MacroForegroundService? = null
 
-        fun startListener(context: Context, statusText: String = "Listening for Telegram commands & scheduled routines") {
+        fun startListener(
+            context: Context,
+            statusText: String = "Listening for Telegram commands & scheduled routines",
+            botToken: String? = null,
+            telegramEnabled: Boolean = false
+        ) {
             val intent = Intent(context, MacroForegroundService::class.java).apply {
                 action = ACTION_START_LISTENER
                 putExtra("status_text", statusText)
+                if (botToken != null) putExtra("telegram_bot_token", botToken)
+                putExtra("telegram_enabled", telegramEnabled)
             }
             startServiceCompat(context, intent)
         }
@@ -64,14 +71,20 @@ class MacroForegroundService : Service() {
             context.stopService(intent)
         }
 
-        fun reloadTelegramPoller() {
+        fun reloadTelegramPoller(botToken: String? = null, telegramEnabled: Boolean? = null) {
             instance?.let { service ->
+                if (botToken != null || telegramEnabled != null) {
+                    val prefs = service.getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE).edit()
+                    botToken?.let { prefs.putString("telegram_bot_token", it) }
+                    telegramEnabled?.let { prefs.putBoolean("telegram_enabled", it) }
+                    prefs.apply()
+                }
                 service.stopTelegramPoller()
                 service.startTelegramPoller()
             }
         }
 
-        fun wakeScreenTemporarily(context: Context, durationMs: Long = 5000L) {
+        fun wakeScreenTemporarily(context: Context, durationMs: Long = 10000L) {
             try {
                 val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
                 @Suppress("DEPRECATION")
@@ -101,6 +114,7 @@ class MacroForegroundService : Service() {
 
     private var partialWakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var screenBrightWakeLock: PowerManager.WakeLock? = null
 
     private var isPollingTelegram = false
     private var pollingThread: Thread? = null
@@ -122,6 +136,7 @@ class MacroForegroundService : Service() {
                 Log.d(TAG, "Stopping service via ACTION_STOP_SERVICE")
                 isRunning = false
                 isExecutingRoutine = false
+                releaseScreenBrightLock()
                 stopTelegramPoller()
                 releaseLocks()
                 stopForeground(true)
@@ -134,6 +149,7 @@ class MacroForegroundService : Service() {
                 isRunning = true
                 isExecutingRoutine = true
                 acquireLocks()
+                acquireScreenBrightLock()
                 val title = intent?.getStringExtra("routine_title") ?: "Running Autonomous Routine..."
                 val notification = buildExecutionNotification(title)
                 startForeground(NOTIFICATION_ID, notification)
@@ -143,7 +159,20 @@ class MacroForegroundService : Service() {
                 Log.d(TAG, "Starting listener mode")
                 isRunning = true
                 isExecutingRoutine = false
+                releaseScreenBrightLock()
                 acquireLocks()
+
+                // Save credentials passed in intent if present
+                val tokenExtra = intent?.getStringExtra("telegram_bot_token")
+                val enabledExtra = intent?.getBooleanExtra("telegram_enabled", false) ?: false
+                if (!tokenExtra.isNullOrEmpty()) {
+                    getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE)
+                        .edit()
+                        .putString("telegram_bot_token", tokenExtra)
+                        .putBoolean("telegram_enabled", enabledExtra)
+                        .apply()
+                }
+
                 startTelegramPoller()
                 val statusText = intent?.getStringExtra("status_text") ?: "Listening for Telegram commands & scheduled routines"
                 val notification = buildListenerNotification(statusText)
@@ -158,6 +187,7 @@ class MacroForegroundService : Service() {
         Log.d(TAG, "MacroForegroundService onDestroy")
         isRunning = false
         isExecutingRoutine = false
+        releaseScreenBrightLock()
         stopTelegramPoller()
         releaseLocks()
         if (instance == this) {
@@ -208,11 +238,49 @@ class MacroForegroundService : Service() {
         }
     }
 
+    private fun acquireScreenBrightLock() {
+        try {
+            if (screenBrightWakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                @Suppress("DEPRECATION")
+                screenBrightWakeLock = pm?.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "PrivateAgent:ExecutionScreenBrightLock"
+                )
+                screenBrightWakeLock?.setReferenceCounted(false)
+            }
+            if (screenBrightWakeLock?.isHeld == false) {
+                // Keep screen bright for up to 10 minutes during execution
+                screenBrightWakeLock?.acquire(600_000L)
+                Log.d(TAG, "Acquired SCREEN_BRIGHT_WAKE_LOCK for routine execution")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error acquiring screen bright lock: ${e.message}")
+        }
+    }
+
+    private fun releaseScreenBrightLock() {
+        try {
+            if (screenBrightWakeLock?.isHeld == true) {
+                screenBrightWakeLock?.release()
+                Log.d(TAG, "Released SCREEN_BRIGHT_WAKE_LOCK")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing screen bright lock: ${e.message}")
+        }
+    }
+
     @Synchronized
     private fun startTelegramPoller() {
-        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        val enabled = prefs.getBoolean("flutter.telegram_enabled", false)
-        val token = prefs.getString("flutter.telegram_bot_token", "") ?: ""
+        val ownPrefs = getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE)
+        val flutterPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+
+        val enabled = ownPrefs.getBoolean(
+            "telegram_enabled",
+            flutterPrefs.getBoolean("flutter.telegram_enabled", false)
+        )
+        val token = ownPrefs.getString("telegram_bot_token", null)
+            ?: flutterPrefs.getString("flutter.telegram_bot_token", "") ?: ""
 
         if (!enabled || token.isEmpty()) {
             Log.d(TAG, "Telegram poller not started: enabled=$enabled, tokenEmpty=${token.isEmpty()}")
@@ -227,10 +295,15 @@ class MacroForegroundService : Service() {
             Log.d(TAG, "Native Telegram background poller thread started")
             while (isPollingTelegram) {
                 try {
-                    val currentToken = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                        .getString("flutter.telegram_bot_token", "") ?: token
-                    val isStillEnabled = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                        .getBoolean("flutter.telegram_enabled", false)
+                    val currentPrefs = getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE)
+                    val flPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+
+                    val currentToken = currentPrefs.getString("telegram_bot_token", null)
+                        ?: flPrefs.getString("flutter.telegram_bot_token", "") ?: token
+                    val isStillEnabled = currentPrefs.getBoolean(
+                        "telegram_enabled",
+                        flPrefs.getBoolean("flutter.telegram_enabled", false)
+                    )
 
                     if (!isStillEnabled || currentToken.isEmpty()) {
                         Log.d(TAG, "Telegram polling disabled or token removed. Stopping.")
@@ -328,12 +401,16 @@ class MacroForegroundService : Service() {
         Log.d(TAG, "Incoming Telegram message: '$text' from chat $chatId")
 
         // Wake screen immediately so UI can be automated if necessary
-        wakeScreenTemporarily(this)
+        wakeScreenTemporarily(this, 10000L)
 
         // Save last active chat ID in preferences
         getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
             .edit()
             .putString("flutter.telegram_last_chat_id", chatId)
+            .apply()
+        getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("telegram_last_chat_id", chatId)
             .apply()
 
         // Handle emergency stop directly
@@ -348,6 +425,14 @@ class MacroForegroundService : Service() {
             return
         }
 
+        // Always bring MainActivity to front so it shows over keyguard
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            putExtra("telegram_chat_id", chatId)
+            putExtra("telegram_text", text)
+        }
+        startActivity(launchIntent)
+
         if (MainActivity.channelSink != null) {
             Log.d(TAG, "MainActivity channel is active. Forwarding to Flutter.")
             Handler(Looper.getMainLooper()).post {
@@ -357,14 +442,8 @@ class MacroForegroundService : Service() {
                 )
             }
         } else {
-            Log.d(TAG, "MainActivity channel is null! Waking and launching MainActivity...")
+            Log.d(TAG, "MainActivity channel is null! Cached in pendingTelegramMessage for startup.")
             MainActivity.pendingTelegramMessage = mapOf("chatId" to chatId, "text" to text)
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                putExtra("telegram_chat_id", chatId)
-                putExtra("telegram_text", text)
-            }
-            startActivity(launchIntent)
         }
     }
 
@@ -428,6 +507,16 @@ class MacroForegroundService : Service() {
     }
 
     private fun buildExecutionNotification(routineTitle: String): Notification {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            this,
+            1003,
+            openIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE else PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val stopIntent = Intent(this, MacroWakeReceiver::class.java).apply {
             action = "${packageName}.STOP_ROUTINE"
         }
@@ -444,7 +533,9 @@ class MacroForegroundService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setContentIntent(openPendingIntent)
+            .setFullScreenIntent(openPendingIntent, true)
             .addAction(android.R.drawable.ic_media_pause, "Emergency Stop", stopPendingIntent)
             .build()
     }

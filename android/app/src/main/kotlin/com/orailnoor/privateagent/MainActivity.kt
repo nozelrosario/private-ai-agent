@@ -36,6 +36,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun handleLockscreenFlags() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -43,9 +44,25 @@ class MainActivity : FlutterActivity() {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
+        }
+    }
+
+    fun dismissKeyguard() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            km?.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() {
+                    android.util.Log.d("MainActivity", "Keyguard dismiss succeeded")
+                }
+                override fun onDismissError() {
+                    android.util.Log.e("MainActivity", "Keyguard dismiss error")
+                }
+                override fun onDismissCancelled() {
+                    android.util.Log.d("MainActivity", "Keyguard dismiss cancelled")
+                }
+            })
         }
     }
 
@@ -366,7 +383,9 @@ class MainActivity : FlutterActivity() {
 
                         "startBackgroundService" -> {
                             val status = call.argument<String>("status") ?: "Listening for Telegram commands & scheduled routines"
-                            MacroForegroundService.startListener(context, status)
+                            val botToken = call.argument<String>("botToken")
+                            val telegramEnabled = call.argument<Boolean>("telegramEnabled") ?: false
+                            MacroForegroundService.startListener(context, status, botToken, telegramEnabled)
                             result.success(true)
                         }
 
@@ -420,12 +439,45 @@ class MainActivity : FlutterActivity() {
                         }
 
                         "reloadTelegramPoller" -> {
-                            MacroForegroundService.reloadTelegramPoller()
+                            val botToken = call.argument<String>("botToken")
+                            val telegramEnabled = call.argument<Boolean>("telegramEnabled")
+                            MacroForegroundService.reloadTelegramPoller(botToken, telegramEnabled)
                             result.success(true)
                         }
 
                         "moveTaskToBack" -> {
                             currentActivity?.moveTaskToBack(true)
+                            result.success(true)
+                        }
+
+                        "dismissKeyguard" -> {
+                            currentActivity?.dismissKeyguard()
+                            result.success(true)
+                        }
+
+                        "canScheduleExactAlarms" -> {
+                            result.success(MacroAlarmScheduler.canScheduleExactAlarms(context))
+                        }
+
+                        "requestExactAlarmPermission" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                                result.success(true)
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "openAppDetailsSettings" -> {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
                             result.success(true)
                         }
 

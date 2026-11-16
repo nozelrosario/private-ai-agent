@@ -10,6 +10,14 @@ import android.util.Log
 object MacroAlarmScheduler {
     private const val TAG = "MacroAlarmScheduler"
 
+    fun canScheduleExactAlarms(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            return alarmManager?.canScheduleExactAlarms() ?: false
+        }
+        return true
+    }
+
     fun scheduleRoutineAlarm(context: Context, routineId: String, delaySeconds: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         val intent = Intent(context, MacroWakeReceiver::class.java).apply {
@@ -28,22 +36,59 @@ object MacroAlarmScheduler {
         val triggerAtMillis = System.currentTimeMillis() + (delaySeconds * 1000L)
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                    Log.d(TAG, "Scheduled exact alarm for routine $routineId in ${delaySeconds}s ($triggerAtMillis)")
+                } else {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                    Log.d(TAG, "Scheduled inexact-while-idle alarm for routine $routineId in ${delaySeconds}s (exact permission not granted)")
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     triggerAtMillis,
                     pendingIntent
                 )
+                Log.d(TAG, "Scheduled alarm for routine $routineId in ${delaySeconds}s")
             } else {
                 alarmManager.setExact(
                     AlarmManager.RTC_WAKEUP,
                     triggerAtMillis,
                     pendingIntent
                 )
+                Log.d(TAG, "Scheduled exact alarm for routine $routineId in ${delaySeconds}s")
             }
-            Log.d(TAG, "Scheduled alarm for routine $routineId in $delaySeconds seconds ($triggerAtMillis)")
+        } catch (se: SecurityException) {
+            Log.w(TAG, "SecurityException scheduling exact alarm. Falling back to setAndAllowWhileIdle: ${se.message}")
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.set(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                }
+                Log.d(TAG, "Fallback alarm scheduled for routine $routineId in ${delaySeconds}s")
+            } catch (fallbackEx: Exception) {
+                Log.e(TAG, "Failed fallback alarm schedule: ${fallbackEx.message}", fallbackEx)
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error scheduling exact alarm: ${e.message}", e)
+            Log.e(TAG, "Error scheduling alarm: ${e.message}", e)
         }
     }
 

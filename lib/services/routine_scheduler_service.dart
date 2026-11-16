@@ -231,6 +231,7 @@ class RoutineSchedulerService {
       final isInteractive = await _screenService.isScreenInteractive();
       if (!isInteractive || wasLockedInitially) {
         await _screenService.wakeScreen();
+        await _screenService.dismissKeyguard();
         await Future.delayed(const Duration(milliseconds: 1000));
       }
 

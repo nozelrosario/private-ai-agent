@@ -92,26 +92,32 @@ class TelegramService {
     } else {
       stopPolling();
     }
-    await ScreenAutomationService().reloadTelegramPoller();
+    await ScreenAutomationService().reloadTelegramPoller(
+      botToken: _botToken,
+      telegramEnabled: _isEnabled,
+    );
   }
 
   Future<void> startPolling() async {
     if (_isPolling) return;
     _isPolling = true;
-    await ScreenAutomationService().startBackgroundService();
-    await ScreenAutomationService().reloadTelegramPoller();
-
-    // Fallback Dart polling if native background service is not yet running
-    final bgRunning = await ScreenAutomationService().isBackgroundServiceRunning();
-    if (!bgRunning) {
-      _pollUpdates();
-    }
+    await ScreenAutomationService().startBackgroundService(
+      botToken: _botToken,
+      telegramEnabled: _isEnabled,
+    );
+    await ScreenAutomationService().reloadTelegramPoller(
+      botToken: _botToken,
+      telegramEnabled: _isEnabled,
+    );
   }
 
   void stopPolling() {
     _isPolling = false;
     _pollingTimer?.cancel();
-    ScreenAutomationService().reloadTelegramPoller();
+    ScreenAutomationService().reloadTelegramPoller(
+      botToken: _botToken,
+      telegramEnabled: false,
+    );
   }
 
   Future<void> _pollUpdates() async {
@@ -257,6 +263,8 @@ class TelegramService {
           final isInteractive = await screenService.isScreenInteractive();
           if (!isInteractive || wasLockedInitially) {
             await screenService.wakeScreen();
+            await screenService.dismissKeyguard();
+            await screenService.swipe(540, 1800, 540, 400); // Swipe up to unlock
             await Future.delayed(const Duration(milliseconds: 1000));
           }
 
