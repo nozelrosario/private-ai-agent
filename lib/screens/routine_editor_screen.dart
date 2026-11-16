@@ -8,6 +8,7 @@ import '../services/persona_service.dart';
 import '../services/custom_skill_service.dart';
 import '../services/routine_service.dart';
 import '../services/routine_scheduler_service.dart';
+import '../services/screen_automation_service.dart';
 
 class RoutineEditorScreen extends StatefulWidget {
   final AutonomousRoutine? routineToEdit;
