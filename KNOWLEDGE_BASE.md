@@ -21,41 +21,53 @@ Welcome to the **PrivateAgent** Knowledge Base. This documentation serves as the
    - High-Level Architecture Diagram
    - Perception-Cognition-Action Feedback Loop
    - Telegram Remote Access Workflow
+   - Autonomous Routine Background Execution & Screen Lifecycle
    - CI/CD Build and Release Pipeline Diagram
+4. **[Autonomous Routines Plan & Specification](file:///sdcard/Projects/nozelrosario/private-ai-agent/docs/AUTONOMOUS_ROUTINES_PLAN.md)**
+   - Autonomous AI Loops, Goals & Success Criteria
+   - Anti-looping Ledger Deduplication Architecture
+   - Android Native Background Alarm Scheduling & Lifecycle
 
 ---
 
 ## ⚡ Quick Architecture Overview
 
 ```
-                                  ┌───────────────────────────┐
-                                  │      User Command         │
-                                  │ (Chat / Voice / Telegram) │
-                                  └─────────────┬─────────────┘
-                                                │
-                                                ▼
-┌───────────────────────────┐      ┌───────────────────────────┐
-│       Skill Memory        │◄────►│       TaskExecutor        │
-│   (Jaccard Fast-Replay)   │      │ (Adaptive Feedback Loop)  │
-└───────────────────────────┘      └─────────────┬─────────────┘
-                                                │
-                     ┌──────────────────────────┴──────────────────────────┐
-                     ▼                                                     ▼
-        ┌─────────────────────────┐                           ┌─────────────────────────┐
-        │ Screen Perception Layer │                           │       LLM Reasoner      │
-        │ - AccessibilityNodeTree │                           │ - OpenAI / DeepSeek     │
-        │ - Bounds & Coordinates  │                           │ - NVIDIA NIM / GLM-5.2  │
-        │ - Screen Compressor     │                           │ - Local Ollama          │
-        └────────────┬────────────┘                           └────────────┬────────────┘
-                     │                                                     │
-                     └──────────────────────────┬──────────────────────────┘
-                                                ▼
-                                  ┌───────────────────────────┐
-                                  │     Execution Engine      │
-                                  │ - Accessibility Gestures  │
-                                  │ - RecoveryEngine Diagnoser│
-                                  │ - Shizuku ADB Shell       │
-                                  └───────────────────────────┘
+ ┌───────────────────────────┐      ┌───────────────────────────┐
+ │       User Command        │      │   MacroAlarmScheduler     │
+ │ (Chat / Voice / Telegram) │      │ (Exact Alarms / WakeLock) │
+ └─────────────┬─────────────┘      └─────────────┬─────────────┘
+               │                                  │
+               ▼                                  ▼
+ ┌───────────────────────────┐      ┌───────────────────────────┐
+ │       Skill Memory        │      │   RoutineLedgerService    │
+ │   (Jaccard Fast-Replay)   │      │ (Anti-looping Hash Ledger)│
+ └─────────────┬─────────────┘      └─────────────┬─────────────┘
+               ▲                                  ▲
+               │                                  │
+               ▼                                  ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │                         TaskExecutor                         │
+ │      (Dual-Stage Loop: Action Dispatch + LLM Evaluator)      │
+ └──────────────────────────────┬───────────────────────────────┘
+                                │
+          ┌─────────────────────┴─────────────────────┐
+          ▼                                           ▼
+┌─────────────────────────┐               ┌─────────────────────────┐
+│ Screen Perception Layer │               │       LLM Reasoner      │
+│ - AccessibilityNodeTree │               │ - OpenAI / DeepSeek     │
+│ - Bounds & Coordinates  │               │ - NVIDIA NIM / GLM-5.2  │
+│ - Screen Compressor     │               │ - Local Ollama          │
+└────────────┬────────────┘               └────────────┬────────────┘
+             │                                         │
+             └────────────────────┬────────────────────┘
+                                  ▼
+                    ┌───────────────────────────┐
+                    │     Execution Engine      │
+                    │ - Accessibility Gestures  │
+                    │ - RecoveryEngine Diagnoser│
+                    │ - Shizuku ADB Shell       │
+                    └───────────────────────────┘
 ```
 
 ---

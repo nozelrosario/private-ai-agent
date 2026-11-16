@@ -9,7 +9,7 @@ class TaskHistoryLogger {
   }
 
   /// Appends a task execution record to the history file
-  static Future<void> logTask(String goal, String status, int totalTokens, int steps, List<String> trace) async {
+  static Future<void> logTask(String goal, String status, int totalTokens, int steps, List<dynamic> trace) async {
     try {
       final file = await _localFile;
       

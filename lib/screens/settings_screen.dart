@@ -54,6 +54,9 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _useSystemPrompt = true;
   bool _floatingIconEnabled = false;
   bool _isOverlayPermissionGranted = false;
+  bool _backgroundServiceEnabled = true;
+  bool _isIgnoringBatteryOptimizations = false;
+  bool _canScheduleExactAlarms = true;
 
   final PersonaService _personaService = PersonaService();
   final CustomSkillService _customSkillService = CustomSkillService();
@@ -91,11 +94,37 @@ class _SettingsScreenState extends State<SettingsScreen>
     _maxTokensController.addListener(_autoSave);
 
     _checkPermissions();
+    _loadBackgroundSettings();
     if (FeatureFlags.floatingOverlayEnabled) {
       _checkOverlayStatus();
     }
     _initPersonasAndSkills();
     _personaService.activePersonaNotifier.addListener(_onActivePersonaChanged);
+  }
+
+  Future<void> _loadBackgroundSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final bgEnabled = prefs.getBool('background_service_enabled') ?? true;
+    final isIgnoring = await widget.screenAutomationService.isIgnoringBatteryOptimizations();
+    final canAlarm = await widget.screenAutomationService.canScheduleExactAlarms();
+    if (mounted) {
+      setState(() {
+        _backgroundServiceEnabled = bgEnabled;
+        _isIgnoringBatteryOptimizations = isIgnoring;
+        _canScheduleExactAlarms = canAlarm;
+      });
+    }
+  }
+
+  Future<void> _checkBatteryOptimizationStatus() async {
+    final isIgnoring = await widget.screenAutomationService.isIgnoringBatteryOptimizations();
+    final canAlarm = await widget.screenAutomationService.canScheduleExactAlarms();
+    if (mounted) {
+      setState(() {
+        _isIgnoringBatteryOptimizations = isIgnoring;
+        _canScheduleExactAlarms = canAlarm;
+      });
+    }
   }
 
   Future<void> _checkOverlayStatus() async {
@@ -150,6 +179,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _checkPermissions();
+      _checkBatteryOptimizationStatus();
       if (FeatureFlags.floatingOverlayEnabled) {
         _checkOverlayStatus();
       }
@@ -203,6 +233,10 @@ class _SettingsScreenState extends State<SettingsScreen>
       useScreenCompression: _useScreenCompression,
       useSystemPrompt: _useSystemPrompt,
     );
+
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setBool('background_service_enabled', _backgroundServiceEnabled);
+    });
   }
 
   Future<void> _fetchModels() async {
@@ -812,6 +846,139 @@ class _SettingsScreenState extends State<SettingsScreen>
                   _autoSave();
                 },
                 contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+
+          // 24/7 Background Service & Power Card
+          _buildSettingsCard(
+            icon: Icons.battery_charging_full_rounded,
+            title: '24/7 Background Service & Power',
+            subtitle: 'Keep agent active to respond to Telegram & scheduled routines when phone is locked',
+            isDark: isDark,
+            children: [
+              SwitchListTile(
+                title: const Text('24/7 Background Listener'),
+                subtitle: const Text(
+                  'Runs persistent low-power listener so routines trigger and Telegram commands respond instantly',
+                ),
+                value: _backgroundServiceEnabled,
+                onChanged: (val) async {
+                  setState(() => _backgroundServiceEnabled = val);
+                  _autoSave();
+                  if (val) {
+                    await widget.screenAutomationService.startBackgroundService();
+                  } else {
+                    await widget.screenAutomationService.stopBackgroundService();
+                  }
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+              const Divider(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  _isIgnoringBatteryOptimizations
+                      ? Icons.check_circle_rounded
+                      : Icons.warning_amber_rounded,
+                  color: _isIgnoringBatteryOptimizations
+                      ? Colors.green
+                      : Colors.orange,
+                ),
+                title: const Text('Battery Optimization Exemption'),
+                subtitle: Text(
+                  _isIgnoringBatteryOptimizations
+                      ? 'Exempt from battery optimization (Doze mode will not sleep the agent)'
+                      : 'Recommended: Exemption allows network & timer execution while locked',
+                ),
+                trailing: _isIgnoringBatteryOptimizations
+                    ? const Chip(
+                        label: Text(
+                          'Exempt',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: Color(0x224CAF50),
+                      )
+                    : ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          textStyle: const TextStyle(fontSize: 12),
+                        ),
+                        onPressed: () async {
+                          await widget.screenAutomationService.requestIgnoreBatteryOptimizations();
+                          await Future.delayed(const Duration(seconds: 1));
+                          _checkBatteryOptimizationStatus();
+                        },
+                        child: const Text('Exempt'),
+                      ),
+              ),
+              const Divider(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  _canScheduleExactAlarms
+                      ? Icons.alarm_on_rounded
+                      : Icons.alarm_off_rounded,
+                  color: _canScheduleExactAlarms
+                      ? Colors.green
+                      : Colors.orange,
+                ),
+                title: const Text('Alarms & Reminders Permission'),
+                subtitle: Text(
+                  _canScheduleExactAlarms
+                      ? 'Exact timing allowed: scheduled routines trigger on time even in deep sleep'
+                      : 'Required for scheduled routines: grant permission to allow exact time wakeups',
+                ),
+                trailing: _canScheduleExactAlarms
+                    ? const Chip(
+                        label: Text(
+                          'Granted',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: Color(0x224CAF50),
+                      )
+                    : ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          textStyle: const TextStyle(fontSize: 12),
+                        ),
+                        onPressed: () async {
+                          await widget.screenAutomationService.requestExactAlarmPermission();
+                          await Future.delayed(const Duration(seconds: 1));
+                          _checkBatteryOptimizationStatus();
+                        },
+                        child: const Text('Grant'),
+                      ),
+              ),
+              const Divider(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(
+                  Icons.power_settings_new_rounded,
+                  color: Colors.blueAccent,
+                ),
+                title: const Text('OEM Background & Autostart'),
+                subtitle: const Text(
+                  'On Vivo, Xiaomi, Oppo, or Samsung: open App Info to enable "Autostart" and set Battery to "Unrestricted" / "High background power".',
+                ),
+                trailing: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    textStyle: const TextStyle(fontSize: 12),
+                  ),
+                  onPressed: () async {
+                    await widget.screenAutomationService.openAppDetailsSettings();
+                  },
+                  child: const Text('Open Settings'),
+                ),
               ),
             ],
           ),

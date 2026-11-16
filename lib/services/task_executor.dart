@@ -12,6 +12,10 @@ import 'recovery_engine.dart';
 import 'skill_router_service.dart';
 import '../models/saved_skill.dart';
 import '../models/custom_skill.dart';
+import '../models/autonomous_routine.dart';
+import 'persona_service.dart';
+import 'routine_ledger_service.dart';
+import 'custom_skill_service.dart';
 
 /// Executes multi-step UI automation tasks using LLM-guided screen reading.
 ///
@@ -136,8 +140,25 @@ Rules:
     }
 
     final results = <String>[];
+    final executionTrace = <dynamic>[];
     results.add('Starting task: $userGoal');
+    executionTrace.add({
+      'info': 'Starting task: $userGoal',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
     _report('Starting task: $userGoal');
+
+    // Wake and dismiss keyguard if device is currently locked or asleep
+    final isInteractiveInitially = await _screenService.isScreenInteractive();
+    final isLockedInitially = await _screenService.isKeyguardLocked();
+    if (!isInteractiveInitially || isLockedInitially) {
+      _report('Device is asleep/locked. Waking and requesting keyguard dismissal...');
+      await _screenService.wakeScreen();
+      await _screenService.dismissKeyguard();
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _screenService.swipe(540, 1800, 540, 400);
+      await Future.delayed(const Duration(milliseconds: 1000));
+    }
 
     // Check skill memory first
     final savedSkill = await _skillMemory.findSkill(userGoal);
@@ -145,7 +166,7 @@ Rules:
       _report(
         'Found saved skill! Replaying ${savedSkill.steps.length} steps...',
       );
-      final replaySuccess = await _replaySkill(savedSkill, results);
+      final replaySuccess = await _replaySkill(savedSkill, results, executionTrace);
       if (replaySuccess) {
         results.add('Task complete via skill memory.');
         _report('Task complete (via skill memory).');
@@ -158,7 +179,7 @@ Rules:
           'Success',
           0,
           savedSkill.steps.length,
-          results,
+          executionTrace.isNotEmpty ? executionTrace : results,
         );
         await _screenService.showToast('Task Complete! (Memory)');
         return 'Done.';
@@ -245,10 +266,21 @@ Rules:
           'Cancelled',
           totalTokens,
           step,
-          results,
+          executionTrace.isNotEmpty ? executionTrace : results,
         );
         await _screenService.showToast('Task Cancelled');
         return 'Task cancelled.';
+      }
+
+      // Verify screen is still active & unlocked mid-execution
+      final isInteractive = await _screenService.isScreenInteractive();
+      final isLocked = await _screenService.isKeyguardLocked();
+      if (!isInteractive || isLocked) {
+        _report('Screen sleep/lock detected mid-execution. Restoring screen...');
+        await _screenService.wakeScreen();
+        await _screenService.dismissKeyguard();
+        await _screenService.swipe(540, 1800, 540, 400);
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
 
       // Adaptive delay: give Android apps time to transition screens, load data, or open keyboards
@@ -350,7 +382,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
             'Cancelled',
             totalTokens,
             step,
-            results,
+            executionTrace.isNotEmpty ? executionTrace : results,
           );
           await _screenService.showToast('Task Cancelled');
           return 'Task cancelled.';
@@ -377,7 +409,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
             'Cancelled',
             totalTokens,
             step,
-            results,
+            executionTrace.isNotEmpty ? executionTrace : results,
           );
           await _screenService.showToast('Task Cancelled');
           await Future.delayed(const Duration(seconds: 2));
@@ -394,7 +426,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
           'Failed',
           totalTokens,
           step,
-          results,
+          executionTrace.isNotEmpty ? executionTrace : results,
         );
         await _screenService.showToast('AI Error: $e');
         await Future.delayed(const Duration(seconds: 3));
@@ -414,7 +446,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
           'Cancelled',
           totalTokens,
           step,
-          results,
+          executionTrace.isNotEmpty ? executionTrace : results,
         );
         await _screenService.showToast('Task Cancelled');
         await Future.delayed(const Duration(seconds: 2));
@@ -467,7 +499,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
             'Failed',
             totalTokens,
             step,
-            results,
+            executionTrace.isNotEmpty ? executionTrace : results,
           );
           await _screenService.showToast('Agent Error: $e');
           await Future.delayed(const Duration(seconds: 3));
@@ -620,7 +652,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
             'Failed',
             totalTokens,
             step,
-            results,
+            executionTrace.isNotEmpty ? executionTrace : results,
           );
           await _screenService.showToast('Agent stuck. Task stopped.');
           await Future.delayed(const Duration(seconds: 4));
@@ -665,6 +697,15 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
       }
 
       results.add('Step ${step + 1}: $actionResult ($reasoning)');
+      executionTrace.add({
+        'step': step + 1,
+        'action': action,
+        'params': params,
+        'reasoning': reasoning,
+        'result': actionResult,
+        'status': success ? 'success' : 'failed',
+        'timestamp': DateTime.now().toIso8601String(),
+      });
 
       // Provide progress feedback
       if (!isComplete && (step + 1) % 3 == 0) {
@@ -682,8 +723,8 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
           userGoal,
           'Success',
           totalTokens,
-          step,
-          results,
+          step + 1,
+          executionTrace.isNotEmpty ? executionTrace : results,
         );
 
         // Save to skill memory
@@ -699,6 +740,10 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
     results.add(
       'Reached maximum steps (${_aiService.maxSteps}). Task may be incomplete.',
     );
+    executionTrace.add({
+      'info': 'Reached maximum steps (${_aiService.maxSteps}). Task may be incomplete.',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
     _report('Reached maximum steps.');
     await _notificationService.showTaskCompleteNotification(
       'Task Stopped',
@@ -709,7 +754,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
       'Failed',
       totalTokens,
       _aiService.maxSteps,
-      results,
+      executionTrace.isNotEmpty ? executionTrace : results,
     );
     await _screenService.showToast('Reached maximum steps.');
     await Future.delayed(const Duration(seconds: 4));
@@ -763,7 +808,7 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
   }
 
   /// Replays a saved skill without using the LLM
-  Future<bool> _replaySkill(SavedSkill skill, List<String> results) async {
+  Future<bool> _replaySkill(SavedSkill skill, List<String> results, [List<dynamic>? trace]) async {
     for (int i = 0; i < skill.steps.length; i++) {
       if (_cancelled) return false;
 
@@ -855,6 +900,15 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
       }
 
       results.add('Memory Replay Step ${i + 1}: $actionResult');
+      trace?.add({
+        'step': i + 1,
+        'action': step.action,
+        'params': step.params,
+        'reasoning': 'Skill Memory Replay: ${skill.task}',
+        'result': actionResult,
+        'status': success ? 'success' : 'failed',
+        'timestamp': DateTime.now().toIso8601String(),
+      });
       developer.log(
         '=== MEMORY REPLAY RESULT ===\n$actionResult',
         name: 'PrivateAgent',
@@ -937,5 +991,478 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
     }
 
     return null;
+  }
+
+  /// Evaluates whether the screen state satisfies the routine's success criteria
+  Future<bool> _evaluateSuccessCriteria({
+    required String goal,
+    required String criteria,
+    required String screenContent,
+    required String lastAction,
+  }) async {
+    const evalSystemPrompt = '''
+You are an autonomous agent task evaluation auditor.
+You are given a TASK GOAL, the SUCCESS CRITERIA, the LAST ACTION executed, and the CURRENT SCREEN DUMP.
+Evaluate whether the success criteria has been completely fulfilled.
+
+Respond with ONLY a JSON object:
+{
+  "criteria_met": true,
+  "reasoning": "brief 1-sentence evaluation"
+}
+''';
+
+    final prompt = '''
+TASK GOAL: $goal
+SUCCESS CRITERIA: $criteria
+LAST ACTION TAKEN: $lastAction
+
+CURRENT SCREEN:
+$screenContent
+
+Has the success criteria been completely met?
+''';
+
+    try {
+      final res = await _aiService.sendTaskMessage(evalSystemPrompt, prompt);
+      final jsonStr = _extractJson(res.content);
+      final decoded = jsonDecode(jsonStr);
+      return decoded['criteria_met'] == true;
+    } catch (e) {
+      developer.log('Success criteria evaluation error: $e',
+          name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Executes an AutonomousRoutine with iterative screen evaluation, bounded guardrails,
+  /// ledger deduplication, and optional supervised confirmation.
+  Future<String> executeAutonomousRoutine(
+    AutonomousRoutine routine, {
+    bool wasLockedInitially = false,
+  }) async {
+    _cancelled = false;
+    final List<String> results = [];
+    final List<dynamic> executionTrace = [];
+    int totalTokens = 0;
+    _report('Starting autonomous routine: "${routine.name}"...');
+    executionTrace.add({
+      'info': 'Starting routine "${routine.name}" (Mode: ${routine.executionMode.name}, Max Steps: ${routine.guardrails.maxStepsPerRun})',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+
+    // 1. If screen was locked initially, attempt unlock routine
+    if (wasLockedInitially) {
+      _report('Screen was locked. Waking device and requesting keyguard dismissal...');
+      await _screenService.wakeScreen();
+      await _screenService.dismissKeyguard();
+      await Future.delayed(const Duration(milliseconds: 500));
+      // Dispatch swipe up to clear standard swipe lockscreen or reveal credential input
+      await _screenService.swipe(540, 1800, 540, 400);
+      await Future.delayed(const Duration(milliseconds: 1000));
+
+      if (routine.unlockSkillId != null) {
+        _report('Attempting unlock skill: ${routine.unlockSkillId}...');
+        final unlockSkill =
+            CustomSkillService().getSkillById(routine.unlockSkillId!);
+        if (unlockSkill != null && unlockSkill.steps.isNotEmpty) {
+          for (final step in unlockSkill.steps) {
+            if (_cancelled) break;
+            if (step.actionTypeHint == 'click_text' &&
+                step.expectedElementHint != null) {
+              await _screenService.clickByText(step.expectedElementHint!);
+            } else if (step.actionTypeHint == 'swipe') {
+              await _screenService.swipe(540, 1800, 540, 400);
+            }
+            await Future.delayed(const Duration(milliseconds: 1000));
+          }
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 1500));
+      final stillLocked = await _screenService.isKeyguardLocked();
+      if (stillLocked) {
+        final msg =
+            'Failed: Screen remained locked after unlock skill execution.';
+        _report(msg);
+        return msg;
+      }
+    }
+
+    // 2. Resolve Persona system prompt modifier
+    final allPersonas = PersonaService().getAllPersonas();
+    final persona = allPersonas.firstWhere(
+      (p) => p.id == routine.personaId,
+      orElse: () => PersonaService().getActivePersona(),
+    );
+    final personaModifier = persona.systemPromptModifier.isNotEmpty
+        ? '\nPERSONA INSTRUCTIONS (${persona.name}):\n${persona.systemPromptModifier}\n'
+        : '';
+
+    // 3. Resolve recent ledger context for anti-looping / deduplication
+    final ledgerEntries = RoutineLedgerService().getRecentEntries(
+      routineId: routine.id,
+      limit: 10,
+    );
+    String ledgerContext = '';
+    if (ledgerEntries.isNotEmpty) {
+      final buffer = StringBuffer();
+      buffer.writeln('\nRECENTLY REPLIED CONTACTS (DO NOT SEND DUPLICATES):');
+      for (final entry in ledgerEntries) {
+        buffer.writeln(
+            '- ${entry.senderIdentifier}: "${entry.messageSnippet}" -> Replied: "${entry.agentReply}" [${entry.status}]');
+      }
+      ledgerContext = buffer.toString();
+    }
+
+    final maxSteps = routine.guardrails.maxStepsPerRun;
+    String lastAction = '';
+    int sameActionCount = 0;
+    int consecutiveFailures = 0;
+
+    // If currently inside PrivateAgent app, navigate to home first
+    final currentPkg = await _screenService.getCurrentPackage();
+    if (currentPkg == 'com.orailnoor.privateagent' ||
+        currentPkg == 'com.orailnoor.privateagent.beta') {
+      _report('Moving to background...');
+      await _screenService.pressHome();
+      await Future.delayed(const Duration(milliseconds: 1500));
+    }
+
+    for (int step = 0; step < maxSteps; step++) {
+      if (_cancelled) {
+        _report('Routine cancelled by user.');
+        results.add('Routine cancelled by user.');
+        executionTrace.add({
+          'info': 'Routine cancelled by user.',
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+        await TaskHistoryLogger.logTask(
+          routine.goalPrompt,
+          'Cancelled',
+          totalTokens,
+          step,
+          executionTrace,
+        );
+        return 'Routine cancelled.';
+      }
+
+      // Verify screen is still active & unlocked mid-routine
+      final isInteractive = await _screenService.isScreenInteractive();
+      final isLocked = await _screenService.isKeyguardLocked();
+      if (!isInteractive || isLocked) {
+        _report('Screen sleep/lock detected mid-routine. Restoring screen...');
+        await _screenService.wakeScreen();
+        await _screenService.dismissKeyguard();
+        await _screenService.swipe(540, 1800, 540, 400);
+        await Future.delayed(const Duration(milliseconds: 1000));
+      }
+
+      int delay = 1200;
+      if (lastAction == 'open_app') {
+        delay = 3000;
+      } else if (lastAction == 'type_text') {
+        delay = 2000;
+      } else if (lastAction == 'click_text' || lastAction == 'click_at') {
+        delay = 1500;
+      } else if (lastAction == 'scroll') {
+        delay = 1000;
+      }
+      await Future.delayed(Duration(milliseconds: delay));
+
+      // Read screen
+      final screenContent = await _screenService.getScreenDescription();
+
+      // Check success criteria evaluation after step 1
+      if (step > 0 && lastAction.isNotEmpty) {
+        _report('Evaluating screen against success criteria...');
+        final criteriaMet = await _evaluateSuccessCriteria(
+          goal: routine.goalPrompt,
+          criteria: routine.successCriteria,
+          screenContent: screenContent,
+          lastAction: lastAction,
+        );
+
+        if (criteriaMet) {
+          _report('Success criteria met! Routine complete.');
+          results.add('Success criteria verified by evaluator.');
+          executionTrace.add({
+            'step': step + 1,
+            'action': 'evaluator_check',
+            'intent': 'Evaluate screen against success criteria',
+            'reasoning': 'Evaluator verified success criteria met: "${routine.successCriteria}"',
+            'result': 'Success criteria satisfied',
+            'status': 'success',
+            'timestamp': DateTime.now().toIso8601String(),
+          });
+          await _notificationService.showTaskCompleteNotification(
+            'Routine Complete',
+            'Routine "${routine.name}" finished successfully.',
+          );
+          await TaskHistoryLogger.logTask(
+            routine.goalPrompt,
+            'Success',
+            totalTokens,
+            step + 1,
+            executionTrace,
+          );
+          return 'Done.';
+        }
+      }
+
+      final prevResultStr = step > 0 && results.isNotEmpty
+          ? '\nPREVIOUS ACTION RESULT: ${results.last}\n'
+          : '';
+
+      String failureHint = '';
+      if (consecutiveFailures >= 3) {
+        failureHint =
+            '\n\nWARNING: You have failed $consecutiveFailures times in a row. Try a different approach.';
+      }
+
+      final prompt = '''
+ROUTINE GOAL: ${routine.goalPrompt}
+SUCCESS CRITERIA: ${routine.successCriteria}
+$personaModifier$ledgerContext
+CURRENT SCREEN TEXT DUMP:
+$screenContent$prevResultStr$failureHint
+Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next action to make progress toward the success criteria?
+''';
+
+      String response;
+      try {
+        _cancelCompleter = Completer<void>();
+        final aiFuture = _aiService.sendTaskMessage(_taskSystemPrompt, prompt);
+        final result = await Future.any([
+          aiFuture.then((r) => r),
+          _cancelCompleter!.future.then((_) => null),
+        ]);
+
+        if (result == null || _cancelled) {
+          return 'Routine cancelled.';
+        }
+
+        final aiResponse = result as AiResponse;
+        response = aiResponse.content;
+        totalTokens += aiResponse.totalTokens;
+      } catch (e) {
+        if (_cancelled) return 'Routine cancelled.';
+        results.add('LLM Error: $e');
+        consecutiveFailures++;
+        continue;
+      }
+
+      Map<String, dynamic>? actionJson;
+      try {
+        final jsonStr = _extractJson(response);
+        actionJson = jsonDecode(jsonStr) as Map<String, dynamic>;
+      } catch (e) {
+        results.add('Failed to parse AI action: $e');
+        consecutiveFailures++;
+        continue;
+      }
+
+      final action = actionJson['action'] as String? ?? '';
+      final params = (actionJson['params'] as Map<String, dynamic>?) ?? {};
+      final isComplete = actionJson['is_complete'] as bool? ?? false;
+      final reasoning = actionJson['reasoning'] as String? ?? '';
+
+      if (action == 'done' || isComplete) {
+        _report('Routine signaled done.');
+        results.add('Routine completed.');
+        executionTrace.add({
+          'step': step + 1,
+          'action': 'done',
+          'intent': reasoning.isNotEmpty ? reasoning : 'Routine completed',
+          'reasoning': reasoning,
+          'result': 'Routine finished successfully',
+          'status': 'success',
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+        await TaskHistoryLogger.logTask(
+          routine.goalPrompt,
+          'Success',
+          totalTokens,
+          step + 1,
+          executionTrace,
+        );
+        return 'Done.';
+      }
+
+      // Check Supervised approval gate if typing text / sending message
+      if (action == 'type_text') {
+        final textToType = params['text'] as String? ?? '';
+        if (routine.executionMode == RoutineExecutionMode.supervised &&
+            onConfirmationRequired != null) {
+          _report('Supervised approval requested: "$textToType"');
+          final approved = await onConfirmationRequired!(
+              'Approve sending message: "$textToType"?');
+          if (!approved || _cancelled) {
+            results.add('Action rejected by user during supervised checkpoint.');
+            executionTrace.add({
+              'step': step + 1,
+              'action': 'supervised_checkpoint',
+              'params': {'text': textToType},
+              'reasoning': 'Action requires supervised user confirmation',
+              'result': 'Rejected by user during supervised checkpoint',
+              'status': 'rejected',
+              'timestamp': DateTime.now().toIso8601String(),
+            });
+            _report('Message skipped (rejected by user).');
+            continue;
+          }
+        }
+      }
+
+      // Execute action
+      _report('Action (${step + 1}/$maxSteps): $action $params');
+      final success = await _executeActionCommand(action, params);
+      final actionDesc = _formatActionDescription(action, params);
+
+      executionTrace.add({
+        'step': step + 1,
+        'action': action,
+        'params': params,
+        'reasoning': reasoning,
+        'result': success ? '$actionDesc succeeded' : '$actionDesc failed',
+        'status': success ? 'success' : 'failed',
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+
+      if (success) {
+        results.add('$action: success');
+        consecutiveFailures = 0;
+
+        // Record message in ledger if typing text
+        if (action == 'type_text') {
+          final sentText = params['text'] as String? ?? '';
+          if (sentText.isNotEmpty) {
+            unawaited(RoutineLedgerService().recordEntry(
+              routineId: routine.id,
+              targetAppPackage: currentPkg ?? 'unknown',
+              senderIdentifier: 'WhatsApp Contact',
+              messageSnippet: routine.goalPrompt,
+              agentReply: sentText,
+              status: 'sent',
+            ));
+          }
+        }
+      } else {
+        results.add('$action: failed');
+        consecutiveFailures++;
+      }
+
+      if (action == lastAction) {
+        sameActionCount++;
+        if (sameActionCount >= 3) {
+          results.add('Loop detected: repeated $action 3 times.');
+          executionTrace.add({
+            'info': 'Loop detected: repeated $action 3 times. Pressed Back.',
+            'timestamp': DateTime.now().toIso8601String(),
+          });
+          await _screenService.pressBack();
+          sameActionCount = 0;
+        }
+      } else {
+        sameActionCount = 1;
+        lastAction = action;
+      }
+    }
+
+    results.add(
+        'Reached maximum step limit ($maxSteps) without fulfilling success criteria.');
+    executionTrace.add({
+      'info': 'Reached maximum step limit ($maxSteps) without fulfilling success criteria.',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    await TaskHistoryLogger.logTask(
+      routine.goalPrompt,
+      'Timeout',
+      totalTokens,
+      maxSteps,
+      executionTrace,
+    );
+    return 'Max steps reached.';
+  }
+
+  Future<bool> _executeActionCommand(
+    String action,
+    Map<String, dynamic> params,
+  ) async {
+    switch (action) {
+      case 'click_text':
+        final text = params['text'] as String? ?? '';
+        return await _screenService.clickByText(text);
+
+      case 'click_at':
+        final x = (params['x'] as num?)?.toDouble() ?? 0;
+        final y = (params['y'] as num?)?.toDouble() ?? 0;
+        return await _screenService.clickAt(x, y);
+
+      case 'type_text':
+        final text = params['text'] as String? ?? '';
+        final hint = params['field_hint'] as String?;
+        return await _screenService.typeText(text, fieldHint: hint);
+
+      case 'press_enter':
+        return await _submitKeyboardAction();
+
+      case 'swipe':
+        final startX = (params['startX'] as num?)?.toDouble() ?? 540;
+        final startY = (params['startY'] as num?)?.toDouble() ?? 2000;
+        final endX = (params['endX'] as num?)?.toDouble() ?? 540;
+        final endY = (params['endY'] as num?)?.toDouble() ?? 500;
+        return await _performSwipe(startX, startY, endX, endY);
+
+      case 'scroll':
+        final direction = params['direction'] as String? ?? 'down';
+        return await _performScroll(direction);
+
+      case 'press_back':
+        return await _screenService.pressBack();
+
+      case 'press_home':
+        return await _screenService.pressHome();
+
+      case 'open_app':
+        final appName = params['app_name'] as String? ?? '';
+        final res = await _appLauncher.openApp(appName);
+        return res.startsWith('Opened');
+
+      case 'wait':
+        await Future.delayed(const Duration(seconds: 1));
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
+  String _formatActionDescription(String action, Map<String, dynamic> params) {
+    switch (action) {
+      case 'click_text':
+        return 'Click "${params['text'] ?? ''}"';
+      case 'click_at':
+        return 'Click at (${params['x']}, ${params['y']})';
+      case 'type_text':
+        return 'Type "${params['text'] ?? ''}"';
+      case 'press_enter':
+        return 'Press Enter';
+      case 'scroll':
+        return 'Scroll ${params['direction'] ?? 'down'}';
+      case 'swipe':
+        return 'Swipe (${params['startX']}, ${params['startY']}) -> (${params['endX']}, ${params['endY']})';
+      case 'open_app':
+        return 'Open app "${params['app_name'] ?? ''}"';
+      case 'press_back':
+        return 'Press Back';
+      case 'press_home':
+        return 'Press Home';
+      case 'wait':
+        return 'Wait';
+      case 'done':
+        return 'Done';
+      default:
+        return '$action $params';
+    }
   }
 }

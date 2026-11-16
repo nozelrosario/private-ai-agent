@@ -26,8 +26,13 @@ class AgentAccessibilityService : AccessibilityService() {
             private set
             
         var eventListener: ((Map<String, Any>) -> Unit)? = null
+        var lastUserInteractionTime: Long = 0L
 
         fun isRunning(): Boolean = instance != null
+
+        fun isUserActivelyInteracting(windowMs: Long = 30000L): Boolean {
+            return (System.currentTimeMillis() - lastUserInteractionTime) < windowMs
+        }
     }
 
     override fun onServiceConnected() {
@@ -37,6 +42,18 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        
+        // Track recent interactions from other apps to detect active phone usage
+        if (event.packageName?.toString() != ownPackageName) {
+            when (event.eventType) {
+                AccessibilityEvent.TYPE_VIEW_CLICKED,
+                AccessibilityEvent.TYPE_VIEW_SCROLLED,
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                    lastUserInteractionTime = System.currentTimeMillis()
+                }
+            }
+        }
+
         val listener = eventListener ?: return
         
         // Filter out events from our own app so we don't record the Stop Overlay button clicks
@@ -459,6 +476,15 @@ class AgentAccessibilityService : AccessibilityService() {
     /** Open notifications */
     fun openNotifications(): Boolean {
         return performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+    }
+
+    /** Lock device screen (requires Android 9+ / API 28) */
+    fun lockScreen(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+        } else {
+            false
+        }
     }
 
     /** Swipe gesture */

@@ -123,7 +123,79 @@ flowchart TD
 
 ---
 
-## 4. CI/CD Release Automation Pipeline
+## 4. Autonomous Routine Background Execution & Screen Lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AM as Android AlarmManager
+    participant MWR as MacroWakeReceiver
+    participant MFS as MacroForegroundService
+    participant AAS as AgentAccessibilityService
+    participant TE as TaskExecutor
+    participant RLS as RoutineLedgerService
+    participant LLM as LLM Provider
+    participant App as Target App (e.g. WhatsApp)
+
+    AM->>MWR: Trigger Exact Alarm (Routine Schedule)
+    MWR->>AAS: isUserActivelyInteracting(30s)?
+    alt User is touching screen
+        MWR->>AM: Postpone by 5 minutes
+        MWR-->>MWR: Exit (Do not interrupt user)
+    else Screen is idle or locked
+        MWR->>MWR: Acquire WakeLock
+        MWR->>MFS: Start Foreground Service + Ongoing Notification
+        MWR->>TE: executeAutonomousRoutine(routine)
+        
+        opt Screen was locked
+            TE->>AAS: Wake display & Replay unlockSkill
+            TE->>AAS: Verify Keyguard is unlocked
+        end
+
+        loop Action Loop (bounded by maxSteps & timeout)
+            TE->>AAS: dumpScreen()
+            AAS-->>TE: Accessibility Tree & Coordinates
+            
+            opt Step > 0
+                TE->>LLM: Evaluate Screen against SuccessCriteria
+                LLM-->>TE: criteria_met?
+                opt Criteria Met
+                    TE-->>TE: Break loop (Success)
+                end
+            end
+
+            TE->>RLS: Fetch recent processed message hashes
+            RLS-->>TE: Deduplication Context
+            TE->>LLM: Decide next action (click/type/scroll)
+            LLM-->>TE: Action JSON (e.g. type_text)
+
+            opt Supervised Mode
+                TE->>MWR: Request user confirmation (Notification / Telegram)
+                MWR-->>TE: Approved
+            end
+
+            TE->>AAS: Dispatch action
+            AAS->>App: Inject gesture / text
+            
+            opt Sent outgoing message
+                TE->>RLS: Record entry (sender, snippet hash, reply)
+            end
+        end
+
+        opt Screen was locked initially
+            TE->>AAS: pressHome()
+            TE->>AAS: lockScreen() (Restore Security)
+        end
+
+        TE->>MFS: Stop Foreground Service
+        TE->>MWR: Release WakeLock
+        TE->>AM: Schedule next recurring run
+    end
+```
+
+---
+
+## 5. CI/CD Release Automation Pipeline
 
 ```mermaid
 flowchart LR

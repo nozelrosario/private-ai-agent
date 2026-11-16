@@ -1,6 +1,9 @@
 package com.orailnoor.privateagent
 
+import android.content.Context
 import android.content.Intent
+import android.app.KeyguardManager
+import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -20,8 +23,81 @@ class MainActivity : FlutterActivity() {
     private var eventSink: EventChannel.EventSink? = null
     private var overlayView: View? = null
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleLockscreenFlags()
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleLockscreenFlags() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+    }
+
+    fun dismissKeyguard() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            km?.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() {
+                    android.util.Log.d("MainActivity", "Keyguard dismiss succeeded")
+                }
+                override fun onDismissError() {
+                    android.util.Log.e("MainActivity", "Keyguard dismiss error")
+                }
+                override fun onDismissCancelled() {
+                    android.util.Log.d("MainActivity", "Keyguard dismiss cancelled")
+                }
+            })
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        moveTaskToBack(true)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val routineId = intent?.getStringExtra("trigger_routine_id")
+        if (!routineId.isNullOrEmpty()) {
+            if (channelSink != null) {
+                channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+            } else {
+                pendingRoutineId = routineId
+            }
+        }
+
+        val tgText = intent?.getStringExtra("telegram_text")
+        val tgChatId = intent?.getStringExtra("telegram_chat_id")
+        if (!tgText.isNullOrEmpty() && !tgChatId.isNullOrEmpty()) {
+            if (channelSink != null) {
+                channelSink?.invokeMethod(
+                    "onTelegramMessageReceived",
+                    mapOf("chatId" to tgChatId, "text" to tgText)
+                )
+            } else {
+                pendingTelegramMessage = mapOf("chatId" to tgChatId, "text" to tgText)
+            }
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        currentActivity = this
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
@@ -44,10 +120,60 @@ class MainActivity : FlutterActivity() {
         registerAccessibilityChannel(flutterEngine, this)
     }
 
+    override fun onDestroy() {
+        if (currentActivity == this) {
+            currentActivity = null
+        }
+        super.onDestroy()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FILE_PICKER_REQUEST_CODE) {
+            val pickerResult = pendingFilePickerResult
+            pendingFilePickerResult = null
+            if (resultCode == RESULT_OK && data?.data != null) {
+                try {
+                    contentResolver.openInputStream(data.data!!)?.use { inputStream ->
+                        val content = inputStream.bufferedReader().use { it.readText() }
+                        pickerResult?.success(content)
+                    } ?: run {
+                        pickerResult?.error("READ_ERROR", "Could not open selected file", null)
+                    }
+                } catch (e: Exception) {
+                    pickerResult?.error("READ_ERROR", e.message, null)
+                }
+            } else {
+                pickerResult?.success(null)
+            }
+        }
+    }
+
     companion object {
+        var channelSink: MethodChannel? = null
+        var currentActivity: MainActivity? = null
+        var pendingFilePickerResult: MethodChannel.Result? = null
+        var pendingRoutineId: String? = null
+        var pendingTelegramMessage: Map<String, String>? = null
+        const val FILE_PICKER_REQUEST_CODE = 4123
+
         fun registerAccessibilityChannel(flutterEngine: FlutterEngine, context: android.content.Context) {
-            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
-                .setMethodCallHandler { call, result ->
+            val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
+            channelSink = channel
+
+            // If an alarm woke the activity before channel was initialized, deliver it now
+            pendingRoutineId?.let { rId ->
+                channel.invokeMethod("onRoutineTriggered", mapOf("routine_id" to rId))
+                pendingRoutineId = null
+            }
+
+            // If a telegram message launched the activity from background, deliver it now
+            pendingTelegramMessage?.let { tgMsg ->
+                channel.invokeMethod("onTelegramMessageReceived", tgMsg)
+                pendingTelegramMessage = null
+            }
+
+            channel.setMethodCallHandler { call, result ->
                     android.util.Log.d("PrivateAgentKotlin", "Received method call: ${call.method}")
                     when (call.method) {
                         "ping" -> result.success(true)
@@ -222,6 +348,250 @@ class MainActivity : FlutterActivity() {
                                 result.error("SERVICE_NOT_RUNNING", "Accessibility service is not running", null)
                             } else {
                                 result.success(service.getCurrentPackage())
+                            }
+                        }
+
+                        "scheduleRoutineAlarm" -> {
+                            val routineId = call.argument<String>("routineId") ?: ""
+                            val delaySeconds = (call.argument<Number>("delaySeconds")?.toLong()) ?: 1800L
+                            MacroAlarmScheduler.scheduleRoutineAlarm(context, routineId, delaySeconds)
+                            result.success(true)
+                        }
+
+                        "cancelRoutineAlarm" -> {
+                            val routineId = call.argument<String>("routineId") ?: ""
+                            MacroAlarmScheduler.cancelRoutineAlarm(context, routineId)
+                            result.success(true)
+                        }
+
+                        "startRoutineForegroundService" -> {
+                            val title = call.argument<String>("title") ?: "Running Routine"
+                            MacroForegroundService.start(context, title)
+                            result.success(true)
+                        }
+
+                        "stopRoutineForegroundService" -> {
+                            val returnToListener = call.argument<Boolean>("returnToListener") ?: true
+                            if (returnToListener) {
+                                MacroForegroundService.startListener(context)
+                            } else {
+                                MacroForegroundService.stop(context)
+                            }
+                            MacroWakeReceiver.releaseWakeLock()
+                            result.success(true)
+                        }
+
+                        "startBackgroundService" -> {
+                            val status = call.argument<String>("status") ?: "Listening for Telegram commands & scheduled routines"
+                            val botToken = call.argument<String>("botToken")
+                            val telegramEnabled = call.argument<Boolean>("telegramEnabled") ?: false
+                            MacroForegroundService.startListener(context, status, botToken, telegramEnabled)
+                            result.success(true)
+                        }
+
+                        "stopBackgroundService" -> {
+                            MacroForegroundService.stop(context)
+                            MacroWakeReceiver.releaseWakeLock()
+                            result.success(true)
+                        }
+
+                        "isBackgroundServiceRunning" -> {
+                            result.success(MacroForegroundService.isRunning)
+                        }
+
+                        "requestIgnoreBatteryOptimizations" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                    result.success(true)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "Failed to open battery optimization settings: ${e.message}")
+                                    result.error("BATTERY_OPTI_ERROR", e.message, null)
+                                }
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "isIgnoringBatteryOptimizations" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                                result.success(pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false)
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "getPendingRoutine" -> {
+                            val rId = pendingRoutineId
+                            pendingRoutineId = null
+                            result.success(rId)
+                        }
+
+                        "getPendingTelegramMessage" -> {
+                            val msg = pendingTelegramMessage
+                            pendingTelegramMessage = null
+                            result.success(msg)
+                        }
+
+                        "reloadTelegramPoller" -> {
+                            val botToken = call.argument<String>("botToken")
+                            val telegramEnabled = call.argument<Boolean>("telegramEnabled")
+                            MacroForegroundService.reloadTelegramPoller(botToken, telegramEnabled)
+                            result.success(true)
+                        }
+
+                        "moveTaskToBack" -> {
+                            currentActivity?.moveTaskToBack(true)
+                            result.success(true)
+                        }
+
+                        "dismissKeyguard" -> {
+                            currentActivity?.dismissKeyguard()
+                            result.success(true)
+                        }
+
+                        "canScheduleExactAlarms" -> {
+                            result.success(MacroAlarmScheduler.canScheduleExactAlarms(context))
+                        }
+
+                        "requestExactAlarmPermission" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                                result.success(true)
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "openAppDetailsSettings" -> {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                            result.success(true)
+                        }
+
+                        "lockScreen" -> {
+                            val service = AgentAccessibilityService.instance
+                            if (service == null) {
+                                result.error("SERVICE_NOT_RUNNING", "Accessibility service is not running", null)
+                            } else {
+                                result.success(service.lockScreen())
+                            }
+                        }
+
+                        "isKeyguardLocked" -> {
+                            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                            result.success(km?.isKeyguardLocked ?: false)
+                        }
+
+                        "isScreenInteractive" -> {
+                            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                            result.success(pm?.isInteractive ?: false)
+                        }
+
+                        "isUserInteracting" -> {
+                            val windowMs = (call.argument<Number>("windowMs")?.toLong()) ?: 30000L
+                            result.success(AgentAccessibilityService.isUserActivelyInteracting(windowMs))
+                        }
+
+                        "wakeScreen" -> {
+                            try {
+                                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                                @Suppress("DEPRECATION")
+                                val wakeLock = pm?.newWakeLock(
+                                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                                    "PrivateAgent:WakeScreen"
+                                )
+                                wakeLock?.acquire(3000L)
+                                result.success(true)
+                            } catch (e: Exception) {
+                                result.error("WAKE_FAILED", e.message, null)
+                            }
+                        }
+
+                        "acquireWakeLock" -> {
+                            MacroWakeReceiver.acquireWakeLock(context)
+                            result.success(true)
+                        }
+
+                        "releaseWakeLock" -> {
+                            MacroWakeReceiver.releaseWakeLock()
+                            result.success(true)
+                        }
+
+                        "pickJsonFile" -> {
+                            val activity = currentActivity
+                            if (activity == null) {
+                                result.error("NO_ACTIVITY", "Cannot pick file without active activity", null)
+                            } else {
+                                pendingFilePickerResult = result
+                                try {
+                                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                        addCategory(Intent.CATEGORY_OPENABLE)
+                                        type = "*/*"
+                                        putExtra(
+                                            Intent.EXTRA_MIME_TYPES,
+                                            arrayOf("application/json", "text/plain", "application/octet-stream")
+                                        )
+                                    }
+                                    activity.startActivityForResult(intent, FILE_PICKER_REQUEST_CODE)
+                                } catch (e: Exception) {
+                                    pendingFilePickerResult = null
+                                    result.error("PICK_ERROR", e.message, null)
+                                }
+                            }
+                        }
+
+                        "saveJsonFileToDownloads" -> {
+                            val fileName = call.argument<String>("fileName") ?: "private_agent_export.json"
+                            val content = call.argument<String>("content") ?: ""
+                            try {
+                                var savedPath = ""
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                    val contentValues = android.content.ContentValues().apply {
+                                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                                        put(
+                                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                                            android.os.Environment.DIRECTORY_DOWNLOADS
+                                        )
+                                    }
+                                    val uri = context.contentResolver.insert(
+                                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                        contentValues
+                                    )
+                                    if (uri != null) {
+                                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                                            outputStream.write(content.toByteArray(Charsets.UTF_8))
+                                        }
+                                        savedPath = "Downloads/$fileName"
+                                    } else {
+                                        throw Exception("Failed to create download URI")
+                                    }
+                                } else {
+                                    val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                                        android.os.Environment.DIRECTORY_DOWNLOADS
+                                    )
+                                    if (!dir.exists()) dir.mkdirs()
+                                    val file = java.io.File(dir, fileName)
+                                    file.writeText(content, Charsets.UTF_8)
+                                    savedPath = file.absolutePath
+                                }
+                                result.success(savedPath)
+                            } catch (e: Exception) {
+                                android.util.Log.e("PrivateAgent", "Failed to save file to downloads", e)
+                                result.error("SAVE_ERROR", e.message, null)
                             }
                         }
 

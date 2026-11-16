@@ -348,4 +348,213 @@ class ScreenAutomationService {
       return null;
     }
   }
+
+  /// Lock device screen (requires Android 9+)
+  Future<bool> lockScreen() async {
+    try {
+      return await _channel.invokeMethod<bool>('lockScreen') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if device Keyguard (lockscreen) is currently engaged
+  Future<bool> isKeyguardLocked() async {
+    try {
+      return await _channel.invokeMethod<bool>('isKeyguardLocked') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if the display is currently turned on/interactive
+  Future<bool> isScreenInteractive() async {
+    try {
+      return await _channel.invokeMethod<bool>('isScreenInteractive') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if the user has touched or scrolled the screen recently
+  Future<bool> isUserInteracting({int windowMs = 30000}) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+              'isUserInteracting', {'windowMs': windowMs}) ??
+          false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Turn on the screen from sleep
+  Future<bool> wakeScreen() async {
+    try {
+      return await _channel.invokeMethod<bool>('wakeScreen') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Opens native document picker to select a JSON file from device storage or SD card.
+  /// Returns the file content as a String, or null if cancelled.
+  Future<String?> pickJsonFile() async {
+    try {
+      final content = await _channel.invokeMethod<String>('pickJsonFile');
+      return content;
+    } catch (e) {
+      developer.log('Failed to pick JSON file: $e', name: 'PrivateAgent');
+      return null;
+    }
+  }
+
+  /// Saves a JSON file to the device's public Downloads directory via MediaStore.
+  /// Returns the relative or absolute saved file path.
+  Future<String?> saveJsonFileToDownloads(String fileName, String content) async {
+    try {
+      final savedPath = await _channel.invokeMethod<String>('saveJsonFileToDownloads', {
+        'fileName': fileName,
+        'content': content,
+      });
+      return savedPath;
+    } catch (e) {
+      developer.log('Failed to save JSON file to Downloads: $e', name: 'PrivateAgent');
+      return null;
+    }
+  }
+
+  /// Start persistent 24/7 background listener service
+  Future<bool> startBackgroundService({
+    String? status,
+    String? botToken,
+    bool? telegramEnabled,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('startBackgroundService', {
+        if (status != null) 'status': status,
+        if (botToken != null) 'botToken': botToken,
+        if (telegramEnabled != null) 'telegramEnabled': telegramEnabled,
+      }) ?? false;
+    } catch (e) {
+      developer.log('Failed to start background service: $e', name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Stop persistent 24/7 background listener service
+  Future<bool> stopBackgroundService() async {
+    try {
+      return await _channel.invokeMethod<bool>('stopBackgroundService') ?? false;
+    } catch (e) {
+      developer.log('Failed to stop background service: $e', name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Check if the persistent background listener service is active
+  Future<bool> isBackgroundServiceRunning() async {
+    try {
+      return await _channel.invokeMethod<bool>('isBackgroundServiceRunning') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Request exemption from Android battery optimizations (Doze mode)
+  Future<bool> requestIgnoreBatteryOptimizations() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations') ?? false;
+    } catch (e) {
+      developer.log('Failed to request battery optimization ignore: $e', name: 'PrivateAgent');
+      return false;
+    }
+  }
+
+  /// Check if the app is currently exempt from battery optimizations
+  Future<bool> isIgnoringBatteryOptimizations() async {
+    try {
+      return await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Query any routine ID that triggered activity launch while locked/backgrounded
+  Future<String?> getPendingRoutine() async {
+    try {
+      return await _channel.invokeMethod<String>('getPendingRoutine');
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Query any telegram message that triggered activity launch while locked/backgrounded
+  Future<Map<String, String>?> getPendingTelegramMessage() async {
+    try {
+      final res = await _channel.invokeMapMethod<String, String>('getPendingTelegramMessage');
+      return res;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Signal native service to reload Telegram poller configuration
+  Future<bool> reloadTelegramPoller({
+    String? botToken,
+    bool? telegramEnabled,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('reloadTelegramPoller', {
+        if (botToken != null) 'botToken': botToken,
+        if (telegramEnabled != null) 'telegramEnabled': telegramEnabled,
+      }) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Move task to background without destroying the activity
+  Future<bool> moveTaskToBack() async {
+    try {
+      return await _channel.invokeMethod<bool>('moveTaskToBack') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Request keyguard dismissal from Android system
+  Future<bool> dismissKeyguard() async {
+    try {
+      return await _channel.invokeMethod<bool>('dismissKeyguard') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if the app is allowed to schedule exact alarms
+  Future<bool> canScheduleExactAlarms() async {
+    try {
+      return await _channel.invokeMethod<bool>('canScheduleExactAlarms') ?? true;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /// Request user permission to schedule exact alarms (Alarms & Reminders)
+  Future<bool> requestExactAlarmPermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestExactAlarmPermission') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Open application details settings (for OEM autostart / high background power)
+  Future<bool> openAppDetailsSettings() async {
+    try {
+      return await _channel.invokeMethod<bool>('openAppDetailsSettings') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
 }
