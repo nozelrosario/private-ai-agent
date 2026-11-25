@@ -155,9 +155,11 @@ Rules:
       _report('Device is asleep/locked. Waking and requesting keyguard dismissal...');
       await _screenService.wakeScreen();
       await _screenService.dismissKeyguard();
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _screenService.swipe(540, 1800, 540, 400);
-      await Future.delayed(const Duration(milliseconds: 1000));
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (await _screenService.isKeyguardLocked()) {
+        await _screenService.swipe(540, 1800, 540, 400);
+        await Future.delayed(const Duration(milliseconds: 600));
+      }
     }
 
     // Check skill memory first
@@ -193,7 +195,9 @@ Rules:
     SkillMatchResult? matchedSkillResult;
     try {
       final router = SkillRouterService(_aiService);
-      matchedSkillResult = await router.routeTask(userGoal);
+      matchedSkillResult = await router
+          .routeTask(userGoal)
+          .timeout(const Duration(seconds: 25), onTimeout: () => null);
     } catch (e) {
       developer.log('Skill routing check skipped: $e', name: 'PrivateAgent');
     }
@@ -240,16 +244,16 @@ Rules:
           break; // Fall back to AI if shortcut step fails
         }
       }
-    } else {
-      // If no shortcut is used, and we are currently inside the PrivateAgent app,
-      // press Home so the AI doesn't see its own chat bubbles and get confused by the task text.
-      final currentPkg = await _screenService.getCurrentPackage();
-      if (currentPkg == 'com.orailnoor.privateagent' ||
-          currentPkg == 'com.orailnoor.privateagent.beta') {
-        _report('Moving to background...');
-        await _screenService.pressHome();
-        await Future.delayed(const Duration(milliseconds: 1500));
-      }
+    }
+
+    // Ensure we are NOT still sitting inside PrivateAgent app before entering
+    // the screen-reading loop (AgentAccessibilityService filters our own window).
+    final currentPkgAfterShortcut = await _screenService.getCurrentPackage();
+    if (currentPkgAfterShortcut == 'com.orailnoor.privateagent' ||
+        currentPkgAfterShortcut == 'com.orailnoor.privateagent.beta') {
+      _report('Moving to background...');
+      await _screenService.pressHome();
+      await Future.delayed(const Duration(milliseconds: 1500));
     }
 
     for (int step = 0; step < _aiService.maxSteps; step++) {
@@ -279,8 +283,11 @@ Rules:
         _report('Screen sleep/lock detected mid-execution. Restoring screen...');
         await _screenService.wakeScreen();
         await _screenService.dismissKeyguard();
-        await _screenService.swipe(540, 1800, 540, 400);
-        await Future.delayed(const Duration(milliseconds: 1000));
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (await _screenService.isKeyguardLocked()) {
+          await _screenService.swipe(540, 1800, 540, 400);
+          await Future.delayed(const Duration(milliseconds: 600));
+        }
       }
 
       // Adaptive delay: give Android apps time to transition screens, load data, or open keyboards
@@ -1057,9 +1064,11 @@ Has the success criteria been completely met?
       await _screenService.wakeScreen();
       await _screenService.dismissKeyguard();
       await Future.delayed(const Duration(milliseconds: 500));
-      // Dispatch swipe up to clear standard swipe lockscreen or reveal credential input
-      await _screenService.swipe(540, 1800, 540, 400);
-      await Future.delayed(const Duration(milliseconds: 1000));
+      if (await _screenService.isKeyguardLocked()) {
+        // Dispatch swipe up to clear standard swipe lockscreen or reveal credential input
+        await _screenService.swipe(540, 1800, 540, 400);
+        await Future.delayed(const Duration(milliseconds: 1000));
+      }
 
       if (routine.unlockSkillId != null) {
         _report('Attempting unlock skill: ${routine.unlockSkillId}...');
@@ -1153,8 +1162,11 @@ Has the success criteria been completely met?
         _report('Screen sleep/lock detected mid-routine. Restoring screen...');
         await _screenService.wakeScreen();
         await _screenService.dismissKeyguard();
-        await _screenService.swipe(540, 1800, 540, 400);
-        await Future.delayed(const Duration(milliseconds: 1000));
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (await _screenService.isKeyguardLocked()) {
+          await _screenService.swipe(540, 1800, 540, 400);
+          await Future.delayed(const Duration(milliseconds: 600));
+        }
       }
 
       int delay = 1200;

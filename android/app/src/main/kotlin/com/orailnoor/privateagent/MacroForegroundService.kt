@@ -119,12 +119,18 @@ class MacroForegroundService : Service() {
     private var isPollingTelegram = false
     private var pollingThread: Thread? = null
     private var lastUpdateId: Long = 0
+    private var lastDispatchedUpdateId: Long = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        lastDispatchedUpdateId = getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE)
+            .getLong("last_dispatched_update_id", 0L)
+        if (lastDispatchedUpdateId > lastUpdateId) {
+            lastUpdateId = lastDispatchedUpdateId
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -136,6 +142,7 @@ class MacroForegroundService : Service() {
                 Log.d(TAG, "Stopping service via ACTION_STOP_SERVICE")
                 isRunning = false
                 isExecutingRoutine = false
+                MainActivity.currentActivity?.applyKeepScreenOn(false)
                 releaseScreenBrightLock()
                 stopTelegramPoller()
                 releaseLocks()
@@ -150,6 +157,7 @@ class MacroForegroundService : Service() {
                 isExecutingRoutine = true
                 acquireLocks()
                 acquireScreenBrightLock()
+                MainActivity.currentActivity?.applyKeepScreenOn(true)
                 val title = intent?.getStringExtra("routine_title") ?: "Running Autonomous Routine..."
                 val notification = buildExecutionNotification(title)
                 startForeground(NOTIFICATION_ID, notification)
@@ -159,6 +167,7 @@ class MacroForegroundService : Service() {
                 Log.d(TAG, "Starting listener mode")
                 isRunning = true
                 isExecutingRoutine = false
+                MainActivity.currentActivity?.applyKeepScreenOn(false)
                 releaseScreenBrightLock()
                 acquireLocks()
 
@@ -288,6 +297,16 @@ class MacroForegroundService : Service() {
             return
         }
 
+        val lastToken = ownPrefs.getString("last_poller_token", null)
+        if (lastToken != null && lastToken != token) {
+            lastUpdateId = 0L
+            lastDispatchedUpdateId = 0L
+            ownPrefs.edit().putLong("last_dispatched_update_id", 0L).apply()
+        }
+        if (lastToken != token) {
+            ownPrefs.edit().putString("last_poller_token", token).apply()
+        }
+
         if (isPollingTelegram) return
         isPollingTelegram = true
 
@@ -374,7 +393,7 @@ class MacroForegroundService : Service() {
                                 val chat = message.optJSONObject("chat")
                                 val chatId = chat?.optLong("id", 0)?.toString() ?: ""
                                 if (text.isNotEmpty() && chatId.isNotEmpty()) {
-                                    onIncomingTelegramMessage(chatId, text, token)
+                                    onIncomingTelegramMessage(chatId, text, token, updateId)
                                 }
                             }
                         }
@@ -397,11 +416,20 @@ class MacroForegroundService : Service() {
         }
     }
 
-    private fun onIncomingTelegramMessage(chatId: String, text: String, token: String) {
-        Log.d(TAG, "Incoming Telegram message: '$text' from chat $chatId")
+    private fun onIncomingTelegramMessage(chatId: String, text: String, token: String, updateId: Long) {
+        if (updateId > 0 && updateId <= lastDispatchedUpdateId) {
+            Log.d(TAG, "Skipping duplicate updateId=$updateId")
+            return
+        }
+        if (updateId > lastDispatchedUpdateId) {
+            lastDispatchedUpdateId = updateId
+            getSharedPreferences("PrivateAgentPrefs", Context.MODE_PRIVATE)
+                .edit()
+                .putLong("last_dispatched_update_id", lastDispatchedUpdateId)
+                .apply()
+        }
 
-        // Wake screen immediately so UI can be automated if necessary
-        wakeScreenTemporarily(this, 10000L)
+        Log.d(TAG, "Incoming Telegram message (updateId=$updateId): '$text' from chat $chatId")
 
         // Save last active chat ID in preferences
         getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
@@ -425,26 +453,12 @@ class MacroForegroundService : Service() {
             return
         }
 
-        // Always bring MainActivity to front so it shows over keyguard
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            putExtra("telegram_chat_id", chatId)
-            putExtra("telegram_text", text)
-        }
-        startActivity(launchIntent)
+        // Wake screen briefly so MainActivity can foreground over keyguard
+        wakeScreenTemporarily(this, 6000L)
 
-        if (MainActivity.channelSink != null) {
-            Log.d(TAG, "MainActivity channel is active. Forwarding to Flutter.")
-            Handler(Looper.getMainLooper()).post {
-                MainActivity.channelSink?.invokeMethod(
-                    "onTelegramMessageReceived",
-                    mapOf("chatId" to chatId, "text" to text)
-                )
-            }
-        } else {
-            Log.d(TAG, "MainActivity channel is null! Cached in pendingTelegramMessage for startup.")
-            MainActivity.pendingTelegramMessage = mapOf("chatId" to chatId, "text" to text)
-        }
+        // Dispatch via race-free queue/channel bridge (avoids dropped cold starts and warm duplicates)
+        val msgId = if (updateId > 0) "${updateId}_${chatId}" else "${System.currentTimeMillis()}_${chatId}"
+        MainActivity.dispatchTelegramMessage(this, chatId, text, msgId)
     }
 
     private fun sendTelegramMessageDirectly(token: String, chatId: String, text: String) {

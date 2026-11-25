@@ -62,21 +62,14 @@ class MacroWakeReceiver : BroadcastReceiver() {
                 acquireWakeLock(context)
 
                 // Wake screen
-                MacroForegroundService.wakeScreenTemporarily(context, 10000L)
+                MacroForegroundService.wakeScreenTemporarily(context, 6000L)
 
                 // Start Foreground Service in execution mode
                 MacroForegroundService.startExecution(context, "Executing scheduled routine...")
 
-                // Always bring MainActivity to front so it shows over keyguard and holds screen on
-                val launchIntent = Intent(context, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    putExtra("trigger_routine_id", routineId)
-                }
-                context.startActivity(launchIntent)
-
-                // Notify Flutter
+                // Notify Flutter via race-free queue/channel dispatcher
                 onRoutineTriggerCallback?.invoke(routineId)
-                MainActivity.channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+                MainActivity.dispatchRoutineTrigger(context, routineId)
             }
 
             action.endsWith(".STOP_ROUTINE") -> {

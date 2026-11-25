@@ -361,7 +361,7 @@ class ScreenAutomationService {
   /// Check if device Keyguard (lockscreen) is currently engaged
   Future<bool> isKeyguardLocked() async {
     try {
-      return await _channel.invokeMethod<bool>('isKeyguardLocked') ?? false;
+      return await _invoke<bool>('isKeyguardLocked') ?? false;
     } catch (e) {
       return false;
     }
@@ -370,7 +370,7 @@ class ScreenAutomationService {
   /// Check if the display is currently turned on/interactive
   Future<bool> isScreenInteractive() async {
     try {
-      return await _channel.invokeMethod<bool>('isScreenInteractive') ?? false;
+      return await _invoke<bool>('isScreenInteractive') ?? false;
     } catch (e) {
       return false;
     }
@@ -379,7 +379,7 @@ class ScreenAutomationService {
   /// Check if the user has touched or scrolled the screen recently
   Future<bool> isUserInteracting({int windowMs = 30000}) async {
     try {
-      return await _channel.invokeMethod<bool>(
+      return await _invoke<bool>(
               'isUserInteracting', {'windowMs': windowMs}) ??
           false;
     } catch (e) {
@@ -390,7 +390,7 @@ class ScreenAutomationService {
   /// Turn on the screen from sleep
   Future<bool> wakeScreen() async {
     try {
-      return await _channel.invokeMethod<bool>('wakeScreen') ?? false;
+      return await _invoke<bool>('wakeScreen') ?? false;
     } catch (e) {
       return false;
     }
@@ -479,22 +479,58 @@ class ScreenAutomationService {
     }
   }
 
+  /// Notify native Android layer that Dart MethodCallHandler is registered and ready
+  Future<bool> markDartReady() async {
+    try {
+      return await _invoke<bool>('markDartReady') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// Query any routine ID that triggered activity launch while locked/backgrounded
   Future<String?> getPendingRoutine() async {
     try {
-      return await _channel.invokeMethod<String>('getPendingRoutine');
+      return await _invoke<String>('getPendingRoutine');
     } catch (e) {
       return null;
+    }
+  }
+
+  /// Drain all pending routine triggers queued before Dart became ready
+  Future<List<String>> getPendingRoutines() async {
+    try {
+      final list = await _invoke<List>('getPendingRoutines');
+      if (list == null) return [];
+      return list.map((e) => e.toString()).toList();
+    } catch (e) {
+      return [];
     }
   }
 
   /// Query any telegram message that triggered activity launch while locked/backgrounded
   Future<Map<String, String>?> getPendingTelegramMessage() async {
     try {
-      final res = await _channel.invokeMapMethod<String, String>('getPendingTelegramMessage');
+      final res = await _channel
+          .invokeMapMethod<String, String>('getPendingTelegramMessage')
+          .timeout(_channelTimeout);
       return res;
     } catch (e) {
       return null;
+    }
+  }
+
+  /// Drain all pending Telegram messages queued before Dart became ready
+  Future<List<Map<String, String>>> getPendingTelegramMessages() async {
+    try {
+      final res = await _invoke<List>('getPendingTelegramMessages');
+      if (res == null) return [];
+      return res
+          .whereType<Map>()
+          .map((m) => m.map((k, v) => MapEntry(k.toString(), v?.toString() ?? '')))
+          .toList();
+    } catch (e) {
+      return [];
     }
   }
 
@@ -504,7 +540,7 @@ class ScreenAutomationService {
     bool? telegramEnabled,
   }) async {
     try {
-      return await _channel.invokeMethod<bool>('reloadTelegramPoller', {
+      return await _invoke<bool>('reloadTelegramPoller', {
         if (botToken != null) 'botToken': botToken,
         if (telegramEnabled != null) 'telegramEnabled': telegramEnabled,
       }) ?? false;
@@ -516,16 +552,58 @@ class ScreenAutomationService {
   /// Move task to background without destroying the activity
   Future<bool> moveTaskToBack() async {
     try {
-      return await _channel.invokeMethod<bool>('moveTaskToBack') ?? false;
+      return await _invoke<bool>('moveTaskToBack') ?? false;
     } catch (e) {
       return false;
     }
   }
 
-  /// Request keyguard dismissal from Android system
+  /// Enable or disable FLAG_KEEP_SCREEN_ON on MainActivity during active execution
+  Future<bool> setKeepScreenOn(bool enabled) async {
+    try {
+      return await _invoke<bool>('setKeepScreenOn', {'enabled': enabled}) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Launch an application by package name directly from native Android context
+  Future<bool> launchPackage(String packageName) async {
+    try {
+      return await _invoke<bool>('launchPackage', {'packageName': packageName}) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Elevate MacroForegroundService into active execution mode (bright wake lock + high-priority notification)
+  Future<bool> startExecutionMode(String title) async {
+    try {
+      return await _invoke<bool>('startRoutineForegroundService', {'title': title}) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Return MacroForegroundService to low-power listener mode after execution
+  Future<bool> stopExecutionMode({bool returnToListener = true}) async {
+    try {
+      return await _invoke<bool>(
+        'stopRoutineForegroundService',
+        {'returnToListener': returnToListener},
+      ) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Request keyguard dismissal from Android system and wait up to 5s for completion
   Future<bool> dismissKeyguard() async {
     try {
-      return await _channel.invokeMethod<bool>('dismissKeyguard') ?? false;
+      return await _channel
+              .invokeMethod<bool>('dismissKeyguard')
+              .timeout(const Duration(seconds: 5), onTimeout: () => false) ??
+          false;
     } catch (e) {
       return false;
     }

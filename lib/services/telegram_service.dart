@@ -20,6 +20,10 @@ class TelegramService {
   Timer? _pollingTimer;
   String? _lastActiveChatId;
   Completer<bool>? _pendingConfirmationCompleter;
+  final Set<String> _processedMessageIds = {};
+
+  /// Optional UI callback to display Telegram commands and progress in HomeScreen
+  void Function(String role, String text)? onUiMessage;
 
   TelegramService(this._actionHandler, this._aiService);
 
@@ -51,22 +55,25 @@ class TelegramService {
     _lastActiveChatId = prefs.getString('telegram_last_chat_id');
 
     // Wire native Telegram message receiver from persistent background service
-    RoutineSchedulerService().onTelegramMessageCallback = (chatId, text) {
-      _handleIncomingMessage(chatId, text);
+    RoutineSchedulerService().onTelegramMessageCallback = (chatId, text, {String? messageId}) {
+      unawaited(_handleIncomingMessage(chatId, text, messageId: messageId));
     };
-
-    // Check if cold start was triggered by an incoming telegram message while locked
-    final pendingMsg = await ScreenAutomationService().getPendingTelegramMessage();
-    if (pendingMsg != null) {
-      final cId = pendingMsg['chatId'];
-      final msgText = pendingMsg['text'];
-      if (cId != null && msgText != null && cId.isNotEmpty && msgText.isNotEmpty) {
-        unawaited(_handleIncomingMessage(cId, msgText));
-      }
-    }
 
     if (_isEnabled && _botToken.isNotEmpty) {
       await startPolling();
+    }
+  }
+
+  /// Drain any pending Telegram messages queued natively before Dart was ready
+  Future<void> checkPendingMessages() async {
+    final pendingList = await ScreenAutomationService().getPendingTelegramMessages();
+    for (final pendingMsg in pendingList) {
+      final cId = pendingMsg['chatId'];
+      final msgText = pendingMsg['text'];
+      final msgId = pendingMsg['messageId'];
+      if (cId != null && msgText != null && cId.isNotEmpty && msgText.isNotEmpty) {
+        unawaited(_handleIncomingMessage(cId, msgText, messageId: msgId));
+      }
     }
   }
 
@@ -161,7 +168,16 @@ class TelegramService {
     }
   }
 
-  Future<void> _handleIncomingMessage(String chatId, String text) async {
+  Future<void> _handleIncomingMessage(String chatId, String text, {String? messageId}) async {
+    if (messageId != null && messageId.isNotEmpty) {
+      if (!_processedMessageIds.add(messageId)) {
+        return;
+      }
+      if (_processedMessageIds.length > 200) {
+        _processedMessageIds.remove(_processedMessageIds.first);
+      }
+    }
+
     _lastActiveChatId = chatId;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('telegram_last_chat_id', chatId);
@@ -228,12 +244,14 @@ class TelegramService {
         return;
       }
 
+      onUiMessage?.call('user', '📩 [Telegram] $trimmed');
       await _sendMessage(
           chatId, '🚀 Triggering routine: *${target.name}* autonomously...');
       final result = await RoutineSchedulerService().triggerRoutine(
         target.id,
         isManual: true,
       );
+      onUiMessage?.call('assistant', '🏁 Routine finished: $result');
       await _sendMessage(chatId, '🏁 Routine finished with result: $result');
       return;
     }
@@ -245,27 +263,43 @@ class TelegramService {
       return;
     }
 
-    // Acknowledge receipt
+    // Surface incoming command in UI & acknowledge receipt on Telegram
+    onUiMessage?.call('user', '📩 [Telegram] $text');
     await _sendMessage(chatId, '🤖 Received: "$text". Working on it...');
 
+    final screenService = ScreenAutomationService();
     try {
+      // Keep screen alive while evaluating and running the command
+      await screenService.setKeepScreenOn(true);
+
       // 1. Send text to AI
       final aiResponse = await _aiService.sendMessage(text);
-      
+
       // 2. Parse the action
       final action = _aiService.parseAction(aiResponse);
 
       if (action != null) {
-        final screenService = ScreenAutomationService();
         bool wasLockedInitially = false;
         try {
+          await screenService.startExecutionMode('Telegram: $trimmed');
           wasLockedInitially = await screenService.isKeyguardLocked();
           final isInteractive = await screenService.isScreenInteractive();
           if (!isInteractive || wasLockedInitially) {
             await screenService.wakeScreen();
             await screenService.dismissKeyguard();
-            await screenService.swipe(540, 1800, 540, 400); // Swipe up to unlock
-            await Future.delayed(const Duration(milliseconds: 1000));
+            await Future.delayed(const Duration(milliseconds: 500));
+            if (await screenService.isKeyguardLocked()) {
+              await screenService.swipe(540, 1800, 540, 400);
+              await Future.delayed(const Duration(milliseconds: 700));
+            }
+          }
+
+          if (await screenService.isKeyguardLocked()) {
+            const lockedMsg =
+                '🔒 Device is locked with a secure PIN/Pattern and could not be unlocked automatically.';
+            onUiMessage?.call('assistant', lockedMsg);
+            await _sendMessage(chatId, lockedMsg);
+            return;
           }
 
           // 3. Execute the action
@@ -273,11 +307,13 @@ class TelegramService {
             action,
             aiService: _aiService,
             onProgress: (msg) {
-              // Send progress updates back to telegram
+              onUiMessage?.call('assistant', '⏳ $msg');
               _sendMessage(chatId, '⏳ $msg');
             },
           );
-          await _sendMessage(chatId, '✅ ${result.details ?? "Done"}');
+          final doneMsg = '✅ ${result.details ?? "Done"}';
+          onUiMessage?.call('assistant', doneMsg);
+          await _sendMessage(chatId, doneMsg);
         } finally {
           if (wasLockedInitially) {
             try {
@@ -286,13 +322,19 @@ class TelegramService {
               await screenService.lockScreen();
             } catch (_) {}
           }
+          await screenService.stopExecutionMode(returnToListener: true);
         }
       } else {
         // It's a plain text response
+        onUiMessage?.call('assistant', '💬 $aiResponse');
         await _sendMessage(chatId, '💬 $aiResponse');
       }
     } catch (e) {
-      await _sendMessage(chatId, '❌ Error: $e');
+      final errMsg = '❌ Error: $e';
+      onUiMessage?.call('assistant', errMsg);
+      await _sendMessage(chatId, errMsg);
+    } finally {
+      await screenService.setKeepScreenOn(false);
     }
   }
 

@@ -28,7 +28,7 @@ class RoutineSchedulerService {
   VoidCallback? onCancelExecutionCallback;
 
   /// Callback when a Telegram message is received natively
-  void Function(String chatId, String text)? onTelegramMessageCallback;
+  void Function(String chatId, String text, {String? messageId})? onTelegramMessageCallback;
 
   bool get isRoutineRunning => _isRoutineRunning;
   String? get activeRunningRoutineId => _activeRunningRoutineId;
@@ -60,8 +60,9 @@ class RoutineSchedulerService {
         case 'onTelegramMessageReceived':
           final chatId = call.arguments['chatId'] as String? ?? '';
           final text = call.arguments['text'] as String? ?? '';
+          final msgId = call.arguments['messageId'] as String?;
           if (chatId.isNotEmpty && text.isNotEmpty) {
-            onTelegramMessageCallback?.call(chatId, text);
+            onTelegramMessageCallback?.call(chatId, text, messageId: msgId);
           }
           break;
       }
@@ -69,13 +70,17 @@ class RoutineSchedulerService {
 
     _initialized = true;
 
-    // Check if an alarm triggered cold start with a pending routine
-    final pendingRoutine = await _screenService.getPendingRoutine();
-    if (pendingRoutine != null && pendingRoutine.isNotEmpty) {
-      unawaited(triggerRoutine(pendingRoutine));
-    }
-
     await syncAllSchedules();
+  }
+
+  /// Drain any pending routine triggers queued before Dart handler became ready
+  Future<void> drainPendingRoutines() async {
+    final pendingRoutines = await _screenService.getPendingRoutines();
+    for (final routineId in pendingRoutines) {
+      if (routineId.isNotEmpty) {
+        unawaited(triggerRoutine(routineId));
+      }
+    }
   }
 
   /// Synchronize all routine alarms based on their current enabled and schedule states
@@ -224,7 +229,8 @@ class RoutineSchedulerService {
     bool wasLockedInitially = false;
 
     try {
-      // 2. Check lockscreen state
+      // 2. Keep screen on while executing and check lockscreen state
+      await _screenService.setKeepScreenOn(true);
       wasLockedInitially = await _screenService.isKeyguardLocked();
 
       // 3. Waking screen if display is off
@@ -232,14 +238,11 @@ class RoutineSchedulerService {
       if (!isInteractive || wasLockedInitially) {
         await _screenService.wakeScreen();
         await _screenService.dismissKeyguard();
-        await Future.delayed(const Duration(milliseconds: 1000));
+        await Future.delayed(const Duration(milliseconds: 500));
       }
 
       // 4. Start native Foreground Service with ongoing notification & Emergency Stop
-      await _channel.invokeMethod(
-        'startRoutineForegroundService',
-        {'title': 'Executing: ${routine.name}'},
-      );
+      await _screenService.startExecutionMode('Executing: ${routine.name}');
 
       // 5. Run the actual loop via callback
       String result = 'Executed';
@@ -295,9 +298,8 @@ class RoutineSchedulerService {
       }
 
       // 7. Stop Execution Mode and return to persistent background listener & release WakeLock
-      try {
-        await _channel.invokeMethod('stopRoutineForegroundService', {'returnToListener': true});
-      } catch (_) {}
+      await _screenService.stopExecutionMode(returnToListener: true);
+      await _screenService.setKeepScreenOn(false);
 
       _isRoutineRunning = false;
       _activeRunningRoutineId = null;

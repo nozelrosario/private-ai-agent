@@ -25,18 +25,20 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        currentActivity = this
         handleLockscreenFlags()
         handleIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        currentActivity = this
         setIntent(intent)
+        handleLockscreenFlags()
         handleIntent(intent)
     }
 
     private fun handleLockscreenFlags() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -49,20 +51,56 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    fun dismissKeyguard() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-            km?.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
-                override fun onDismissSucceeded() {
-                    android.util.Log.d("MainActivity", "Keyguard dismiss succeeded")
+    fun applyKeepScreenOn(enabled: Boolean) {
+        runOnUiThread {
+            if (enabled) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    fun dismissKeyguardWithCallback(onComplete: (Boolean) -> Unit) {
+        runOnUiThread {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                if (km == null || !km.isKeyguardLocked) {
+                    onComplete(true)
+                    return@runOnUiThread
                 }
-                override fun onDismissError() {
-                    android.util.Log.e("MainActivity", "Keyguard dismiss error")
+                var finished = false
+                val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                val finishOnce = { success: Boolean ->
+                    if (!finished) {
+                        finished = true
+                        handler.removeCallbacksAndMessages(null)
+                        onComplete(success)
+                    }
                 }
-                override fun onDismissCancelled() {
-                    android.util.Log.d("MainActivity", "Keyguard dismiss cancelled")
+                handler.postDelayed({ finishOnce(!km.isKeyguardLocked) }, 2500L)
+                try {
+                    km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                        override fun onDismissSucceeded() {
+                            android.util.Log.d("MainActivity", "Keyguard dismiss succeeded")
+                            finishOnce(true)
+                        }
+                        override fun onDismissError() {
+                            android.util.Log.e("MainActivity", "Keyguard dismiss error")
+                            finishOnce(false)
+                        }
+                        override fun onDismissCancelled() {
+                            android.util.Log.d("MainActivity", "Keyguard dismiss cancelled")
+                            finishOnce(false)
+                        }
+                    })
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "requestDismissKeyguard failed: ${e.message}")
+                    finishOnce(false)
                 }
-            })
+            } else {
+                onComplete(true)
+            }
         }
     }
 
@@ -74,24 +112,14 @@ class MainActivity : FlutterActivity() {
     private fun handleIntent(intent: Intent?) {
         val routineId = intent?.getStringExtra("trigger_routine_id")
         if (!routineId.isNullOrEmpty()) {
-            if (channelSink != null) {
-                channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
-            } else {
-                pendingRoutineId = routineId
-            }
+            deliverOrQueueRoutine(routineId)
         }
 
         val tgText = intent?.getStringExtra("telegram_text")
         val tgChatId = intent?.getStringExtra("telegram_chat_id")
+        val tgMsgId = intent?.getStringExtra("telegram_msg_id") ?: ""
         if (!tgText.isNullOrEmpty() && !tgChatId.isNullOrEmpty()) {
-            if (channelSink != null) {
-                channelSink?.invokeMethod(
-                    "onTelegramMessageReceived",
-                    mapOf("chatId" to tgChatId, "text" to tgText)
-                )
-            } else {
-                pendingTelegramMessage = mapOf("chatId" to tgChatId, "text" to tgText)
-            }
+            deliverOrQueueTelegram(tgChatId, tgText, tgMsgId)
         }
     }
 
@@ -120,9 +148,20 @@ class MainActivity : FlutterActivity() {
         registerAccessibilityChannel(flutterEngine, this)
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (activeEngine == flutterEngine) {
+            isDartReady = false
+            channelSink = null
+            activeEngine = null
+        }
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     override fun onDestroy() {
         if (currentActivity == this) {
             currentActivity = null
+            isDartReady = false
+            channelSink = null
         }
         super.onDestroy()
     }
@@ -153,25 +192,116 @@ class MainActivity : FlutterActivity() {
         var channelSink: MethodChannel? = null
         var currentActivity: MainActivity? = null
         var pendingFilePickerResult: MethodChannel.Result? = null
-        var pendingRoutineId: String? = null
-        var pendingTelegramMessage: Map<String, String>? = null
+        @Volatile
+        var isDartReady: Boolean = false
+        private var activeEngine: FlutterEngine? = null
+        private val pendingRoutineIds = java.util.Collections.synchronizedList(mutableListOf<String>())
+        private val pendingTelegramMessages = java.util.Collections.synchronizedList(mutableListOf<Map<String, String>>())
+        private val seenTelegramMsgIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
         const val FILE_PICKER_REQUEST_CODE = 4123
+
+        fun dispatchTelegramMessage(context: android.content.Context, chatId: String, text: String, messageId: String) {
+            val msgMap = mapOf("chatId" to chatId, "text" to text, "messageId" to messageId)
+            val alreadySeen = if (messageId.isNotEmpty()) !seenTelegramMsgIds.add(messageId) else false
+            if (alreadySeen) {
+                android.util.Log.d("MainActivity", "Skipping duplicate Telegram messageId=$messageId")
+                return
+            }
+
+            if (isDartReady && channelSink != null && currentActivity != null) {
+                android.util.Log.d("MainActivity", "Dart ready; bringing MainActivity to front and invoking onTelegramMessageReceived")
+                val launchIntent = Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+                context.startActivity(launchIntent)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (isDartReady && channelSink != null) {
+                        channelSink?.invokeMethod("onTelegramMessageReceived", msgMap)
+                    } else {
+                        synchronized(pendingTelegramMessages) {
+                            pendingTelegramMessages.add(msgMap)
+                        }
+                    }
+                }
+            } else {
+                android.util.Log.d("MainActivity", "Dart not ready (isDartReady=$isDartReady); queuing Telegram message and launching MainActivity")
+                synchronized(pendingTelegramMessages) {
+                    pendingTelegramMessages.add(msgMap)
+                }
+                val launchIntent = Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    putExtra("telegram_chat_id", chatId)
+                    putExtra("telegram_text", text)
+                    putExtra("telegram_msg_id", messageId)
+                }
+                context.startActivity(launchIntent)
+            }
+        }
+
+        fun dispatchRoutineTrigger(context: android.content.Context, routineId: String) {
+            if (isDartReady && channelSink != null && currentActivity != null) {
+                android.util.Log.d("MainActivity", "Dart ready; bringing MainActivity to front and invoking onRoutineTriggered")
+                val launchIntent = Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+                context.startActivity(launchIntent)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (isDartReady && channelSink != null) {
+                        channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+                    } else {
+                        synchronized(pendingRoutineIds) {
+                            if (!pendingRoutineIds.contains(routineId)) {
+                                pendingRoutineIds.add(routineId)
+                            }
+                        }
+                    }
+                }
+            } else {
+                android.util.Log.d("MainActivity", "Dart not ready; queuing routine trigger $routineId and launching MainActivity")
+                synchronized(pendingRoutineIds) {
+                    if (!pendingRoutineIds.contains(routineId)) {
+                        pendingRoutineIds.add(routineId)
+                    }
+                }
+                val launchIntent = Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    putExtra("trigger_routine_id", routineId)
+                }
+                context.startActivity(launchIntent)
+            }
+        }
+
+        private fun deliverOrQueueRoutine(routineId: String) {
+            if (isDartReady && channelSink != null) {
+                channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
+            } else {
+                synchronized(pendingRoutineIds) {
+                    if (!pendingRoutineIds.contains(routineId)) {
+                        pendingRoutineIds.add(routineId)
+                    }
+                }
+            }
+        }
+
+        private fun deliverOrQueueTelegram(chatId: String, text: String, messageId: String) {
+            if (messageId.isNotEmpty() && !seenTelegramMsgIds.add(messageId)) {
+                return
+            }
+            val msgMap = mapOf("chatId" to chatId, "text" to text, "messageId" to messageId)
+            if (isDartReady && channelSink != null) {
+                channelSink?.invokeMethod("onTelegramMessageReceived", msgMap)
+            } else {
+                synchronized(pendingTelegramMessages) {
+                    pendingTelegramMessages.add(msgMap)
+                }
+            }
+        }
 
         fun registerAccessibilityChannel(flutterEngine: FlutterEngine, context: android.content.Context) {
             val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.privateagent/accessibility")
             channelSink = channel
-
-            // If an alarm woke the activity before channel was initialized, deliver it now
-            pendingRoutineId?.let { rId ->
-                channel.invokeMethod("onRoutineTriggered", mapOf("routine_id" to rId))
-                pendingRoutineId = null
-            }
-
-            // If a telegram message launched the activity from background, deliver it now
-            pendingTelegramMessage?.let { tgMsg ->
-                channel.invokeMethod("onTelegramMessageReceived", tgMsg)
-                pendingTelegramMessage = null
-            }
+            activeEngine = flutterEngine
+            isDartReady = false
 
             channel.setMethodCallHandler { call, result ->
                     android.util.Log.d("PrivateAgentKotlin", "Received method call: ${call.method}")
@@ -426,16 +556,42 @@ class MainActivity : FlutterActivity() {
                             }
                         }
 
+                        "markDartReady" -> {
+                            isDartReady = true
+                            android.util.Log.d("MainActivity", "Dart handler marked ready")
+                            result.success(true)
+                        }
+
                         "getPendingRoutine" -> {
-                            val rId = pendingRoutineId
-                            pendingRoutineId = null
+                            val rId = synchronized(pendingRoutineIds) {
+                                if (pendingRoutineIds.isNotEmpty()) pendingRoutineIds.removeAt(0) else null
+                            }
                             result.success(rId)
                         }
 
+                        "getPendingRoutines" -> {
+                            val list = synchronized(pendingRoutineIds) {
+                                val copy = pendingRoutineIds.toList()
+                                pendingRoutineIds.clear()
+                                copy
+                            }
+                            result.success(list)
+                        }
+
                         "getPendingTelegramMessage" -> {
-                            val msg = pendingTelegramMessage
-                            pendingTelegramMessage = null
+                            val msg = synchronized(pendingTelegramMessages) {
+                                if (pendingTelegramMessages.isNotEmpty()) pendingTelegramMessages.removeAt(0) else null
+                            }
                             result.success(msg)
+                        }
+
+                        "getPendingTelegramMessages" -> {
+                            val list = synchronized(pendingTelegramMessages) {
+                                val copy = pendingTelegramMessages.toList()
+                                pendingTelegramMessages.clear()
+                                copy
+                            }
+                            result.success(list)
                         }
 
                         "reloadTelegramPoller" -> {
@@ -450,9 +606,45 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         }
 
-                        "dismissKeyguard" -> {
-                            currentActivity?.dismissKeyguard()
+                        "setKeepScreenOn" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: false
+                            currentActivity?.applyKeepScreenOn(enabled)
                             result.success(true)
+                        }
+
+                        "launchPackage" -> {
+                            val pkg = call.argument<String>("packageName") ?: ""
+                            if (pkg.isEmpty()) {
+                                result.success(false)
+                            } else {
+                                val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
+                                if (launchIntent != null) {
+                                    launchIntent.addFlags(
+                                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                                    )
+                                    try {
+                                        (currentActivity ?: context).startActivity(launchIntent)
+                                        result.success(true)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MainActivity", "launchPackage failed for $pkg: ${e.message}")
+                                        result.success(false)
+                                    }
+                                } else {
+                                    result.success(false)
+                                }
+                            }
+                        }
+
+                        "dismissKeyguard" -> {
+                            val act = currentActivity
+                            if (act != null) {
+                                act.dismissKeyguardWithCallback { dismissed ->
+                                    result.success(dismissed)
+                                }
+                            } else {
+                                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                                result.success(!(km?.isKeyguardLocked ?: false))
+                            }
                         }
 
                         "canScheduleExactAlarms" -> {

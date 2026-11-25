@@ -252,18 +252,35 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
         name: 'AiService',
       );
 
-      final response = await http
-          .post(
-            Uri.parse(requestUrl),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $_apiKey',
-              'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
-              'X-Title': 'PrivateAgent',
-            },
-            body: requestBody,
-          )
-          .timeout(const Duration(minutes: 30));
+      http.Response? response;
+      const int maxAttempts = 3;
+      for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+        final client = http.Client();
+        try {
+          response = await client
+              .post(
+                Uri.parse(requestUrl),
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer $_apiKey',
+                  'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
+                  'X-Title': 'PrivateAgent',
+                },
+                body: requestBody,
+              )
+              .timeout(const Duration(seconds: 60));
+          break;
+        } catch (e) {
+          if (attempt >= maxAttempts) rethrow;
+          await Future.delayed(Duration(seconds: 2 * attempt));
+        } finally {
+          client.close();
+        }
+      }
+
+      if (response == null) {
+        throw Exception('No response received from AI API.');
+      }
 
       developer.log(
         'API Response [${response.statusCode}]: ${response.body}',
@@ -494,23 +511,29 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
           }
         }
 
-        final response = await http
-            .post(
-              Uri.parse(requestUrl),
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $_apiKey',
-                'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
-                'X-Title': 'PrivateAgent',
-              },
-              body: jsonEncode({
-                'model': _model,
-                'messages': messages,
-                'temperature': _temperature,
-                'max_tokens': _effectiveMaxTokens,
-              }),
-            )
-            .timeout(const Duration(minutes: 30));
+        final client = http.Client();
+        http.Response response;
+        try {
+          response = await client
+              .post(
+                Uri.parse(requestUrl),
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer $_apiKey',
+                  'HTTP-Referer': 'https://github.com/nozelrosario/private-ai-agent',
+                  'X-Title': 'PrivateAgent',
+                },
+                body: jsonEncode({
+                  'model': _model,
+                  'messages': messages,
+                  'temperature': _temperature,
+                  'max_tokens': _effectiveMaxTokens,
+                }),
+              )
+              .timeout(const Duration(seconds: 60));
+        } finally {
+          client.close();
+        }
 
         if (response.statusCode != 200) {
           String errorMessage = response.body;
@@ -572,20 +595,24 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
     // Try to parse as JSON action
     try {
       final trimmed = response.trim();
-      // Handle if the response is wrapped in code fences
       String jsonStr = trimmed;
-      if (trimmed.startsWith('```')) {
-        final lines = trimmed.split('\n');
-        lines.removeAt(0); // Remove opening fence
-        if (lines.isNotEmpty && lines.last.trim() == '```') {
-          lines.removeLast(); // Remove closing fence
-        }
-        jsonStr = lines.join('\n').trim();
-      }
 
-      // If it looks like JSON but is missing a closing brace (common with some local models)
-      if (jsonStr.startsWith('{') && !jsonStr.endsWith('}')) {
-        jsonStr += '\n}';
+      // 1. Extract code block if present anywhere in response
+      final codeBlockMatch = RegExp(
+        r'```(?:json)?\s*(\{[\s\S]*?\})\s*```',
+      ).firstMatch(trimmed);
+      if (codeBlockMatch != null) {
+        jsonStr = codeBlockMatch.group(1)!.trim();
+      } else {
+        // 2. Otherwise locate outermost JSON object
+        final startIdx = trimmed.indexOf('{');
+        final endIdx = trimmed.lastIndexOf('}');
+        if (startIdx != -1 && endIdx > startIdx) {
+          jsonStr = trimmed.substring(startIdx, endIdx + 1).trim();
+        } else if (startIdx != -1) {
+          // Handle truncated JSON object missing closing brace
+          jsonStr = '${trimmed.substring(startIdx).trim()}\n}';
+        }
       }
 
       if (jsonStr.startsWith('{') && jsonStr.contains('"action"')) {
@@ -595,7 +622,6 @@ Answer questions, explain concepts, brainstorm, write emails/messages, and chat 
             return AgentAction.fromJson(json);
           }
         } catch (e) {
-          // If it still fails, it might be deeply truncated, try adding another brace
           if (e.toString().contains('Unexpected end of input')) {
             jsonStr += '\n}';
             final json = jsonDecode(jsonStr) as Map<String, dynamic>;

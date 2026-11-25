@@ -70,49 +70,95 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _initServices() async {
-    await _aiService.init();
-    await CustomSkillService().init();
-    await PersonaService().init();
-    await RoutineService().init();
-    await RoutineLedgerService().init();
-    await _notificationService.requestPermission();
-    await _voiceService.init();
-    await _telegramService.init();
-    await _actionHandler.shizuku.checkAvailability();
+    try { await _aiService.init(); } catch (e) { developer.log('AiService init error: $e', name: 'PrivateAgent'); }
+    try { await CustomSkillService().init(); } catch (e) { developer.log('CustomSkillService init error: $e', name: 'PrivateAgent'); }
+    try { await PersonaService().init(); } catch (e) { developer.log('PersonaService init error: $e', name: 'PrivateAgent'); }
+    try { await RoutineService().init(); } catch (e) { developer.log('RoutineService init error: $e', name: 'PrivateAgent'); }
+    try { await RoutineLedgerService().init(); } catch (e) { developer.log('RoutineLedgerService init error: $e', name: 'PrivateAgent'); }
 
     TaskExecutor? activeRoutineExecutor;
-    await RoutineSchedulerService().init(
-      onExecuteRoutine: (routine, {wasLockedInitially = false}) async {
-        activeRoutineExecutor = TaskExecutor(
-          aiService: _aiService,
-          screenService: ScreenAutomationService(),
-          appLauncher: AppLauncherService(),
-          shizukuService: _actionHandler.shizuku,
-          onProgress: (msg) {
-            developer.log('Routine progress: $msg', name: 'PrivateAgent');
-          },
-          onConfirmationRequired: (prompt) async {
-            if (_telegramService.isEnabled) {
-              return await _telegramService.requestConfirmation(prompt);
-            }
-            return true;
-          },
-        );
-        return await activeRoutineExecutor!.executeAutonomousRoutine(
-          routine,
-          wasLockedInitially: wasLockedInitially,
-        );
-      },
-      onCancelExecution: () {
-        activeRoutineExecutor?.cancel();
-      },
-    );
-
-    final prefs = await SharedPreferences.getInstance();
-    final bgServiceEnabled = prefs.getBool('background_service_enabled') ?? true;
-    if (bgServiceEnabled || _telegramService.isEnabled) {
-      await ScreenAutomationService().startBackgroundService();
+    try {
+      await RoutineSchedulerService().init(
+        onExecuteRoutine: (routine, {wasLockedInitially = false}) async {
+          activeRoutineExecutor = TaskExecutor(
+            aiService: _aiService,
+            screenService: ScreenAutomationService(),
+            appLauncher: AppLauncherService(),
+            shizukuService: _actionHandler.shizuku,
+            onProgress: (msg) {
+              developer.log('Routine progress: $msg', name: 'PrivateAgent');
+            },
+            onConfirmationRequired: (prompt) async {
+              if (_telegramService.isEnabled) {
+                return await _telegramService.requestConfirmation(prompt);
+              }
+              return true;
+            },
+          );
+          return await activeRoutineExecutor!.executeAutonomousRoutine(
+            routine,
+            wasLockedInitially: wasLockedInitially,
+          );
+        },
+        onCancelExecution: () {
+          activeRoutineExecutor?.cancel();
+        },
+      );
+    } catch (e) {
+      developer.log('RoutineSchedulerService init error: $e', name: 'PrivateAgent');
     }
+
+    _telegramService.onUiMessage = (role, text) {
+      if (!mounted) return;
+      setState(() {
+        _messages.add(ChatMessage(role: role, content: text));
+      });
+      _scrollToBottom();
+    };
+
+    try {
+      await _telegramService.init();
+    } catch (e) {
+      developer.log('TelegramService init error: $e', name: 'PrivateAgent');
+    }
+
+    // Signal native Android side that Dart MethodChannel handlers are ready, then drain queued triggers
+    final screenService = ScreenAutomationService();
+    await screenService.markDartReady();
+    unawaited(RoutineSchedulerService().drainPendingRoutines());
+    unawaited(_telegramService.checkPendingMessages());
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final bgServiceEnabled = prefs.getBool('background_service_enabled') ?? true;
+      if (bgServiceEnabled || _telegramService.isEnabled) {
+        await screenService.startBackgroundService(
+          botToken: _telegramService.botToken,
+          telegramEnabled: _telegramService.isEnabled,
+        );
+      }
+    } catch (e) {
+      developer.log('Background service start error: $e', name: 'PrivateAgent');
+    }
+
+    // Run secondary UI/helper inits non-blocking so they never stall remote automation or lockscreen startup
+    unawaited(() async {
+      try {
+        await _notificationService.requestPermission().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        developer.log('Notification permission skipped: $e', name: 'PrivateAgent');
+      }
+      try {
+        await _voiceService.init().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        developer.log('VoiceService init skipped: $e', name: 'PrivateAgent');
+      }
+      try {
+        await _actionHandler.shizuku.checkAvailability().timeout(const Duration(seconds: 3));
+      } catch (e) {
+        developer.log('Shizuku check skipped: $e', name: 'PrivateAgent');
+      }
+    }());
 
     if (mounted) {
       setState(() {});
@@ -438,6 +484,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _handleAppForegrounded() async {
     await _updateOverlayState();
     await _importOverlayChatHistory();
+    await RoutineSchedulerService().drainPendingRoutines();
+    await _telegramService.checkPendingMessages();
   }
 
   Future<void> _importOverlayChatHistory() async {
