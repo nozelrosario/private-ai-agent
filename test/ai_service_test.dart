@@ -25,4 +25,25 @@ void main() {
     expect(AiService.nvidiaDefaultModel, 'z-ai/glm-5.2');
     expect(AiService.nvidiaFreeChatModels.first, 'z-ai/glm-5.2');
   });
+
+  test('parseAction extracts JSON actions cleanly including prose-prefixed fenced responses', () {
+    final ai = AiService();
+
+    final raw = ai.parseAction(
+      '{"action": "execute_task", "params": {"goal": "open whatsapp"}, "response": "Opening WhatsApp"}',
+    );
+    expect(raw, isNotNull);
+    expect(raw!.action, 'execute_task');
+    expect(raw.params['goal'], 'open whatsapp');
+
+    final prefixedFence = ai.parseAction(
+      'Sure, running that now:\n```json\n{"action": "execute_task", "params": {"goal": "check whatsapp"}, "response": "Checking"}\n```',
+    );
+    expect(prefixedFence, isNotNull);
+    expect(prefixedFence!.action, 'execute_task');
+    expect(prefixedFence.params['goal'], 'check whatsapp');
+
+    final plainChat = ai.parseAction('Hello! How can I help you today?');
+    expect(plainChat, isNull);
+  });
 }

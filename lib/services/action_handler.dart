@@ -145,6 +145,15 @@ class ActionHandler {
           result = success ? 'Pressed back' : 'Could not press back';
           break;
 
+        case 'lock_screen':
+          await _screenAutomation.setTaskKeepAwake(false);
+          await _screenAutomation.setKeepScreenOn(false);
+          await _screenAutomation.stopExecutionMode(returnToListener: true);
+          await Future.delayed(const Duration(milliseconds: 150));
+          final locked = await _screenAutomation.lockScreen();
+          result = locked ? 'Screen locked.' : 'Could not lock screen.';
+          break;
+
         // ─── Multi-Step Task Execution ────────────────────────
 
         case 'execute_task':
