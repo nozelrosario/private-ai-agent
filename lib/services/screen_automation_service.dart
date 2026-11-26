@@ -576,6 +576,18 @@ class ScreenAutomationService {
     }
   }
 
+  /// Keep screen awake across ALL apps via invisible 1x1 Accessibility Overlay with FLAG_KEEP_SCREEN_ON
+  Future<bool> setTaskKeepAwake(bool enabled, {String owner = 'task_executor'}) async {
+    try {
+      return await _invoke<bool>('setTaskKeepAwake', {
+        'enabled': enabled,
+        'owner': owner,
+      }) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// Check if Display Over Other Apps (SYSTEM_ALERT_WINDOW) is granted
   Future<bool> checkOverlayPermission() async {
     try {

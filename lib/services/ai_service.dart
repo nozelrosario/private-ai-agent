@@ -77,6 +77,7 @@ SIMPLE ACTIONS (single step only):
 - set_brightness: {"level": 50} - Sets brightness (0-100)
 - read_screen: {} - Read what's currently on the screen
 - press_back: {} - Press the back button
+- lock_screen: {} - Lock the phone screen (ONLY use when the user deliberately asks to lock the phone)
 
 MULTI-STEP TASK (for anything that requires more than one action):
 - execute_task: {"goal": "description of the full task"} - Automatically reads screen, taps, scrolls, types step by step

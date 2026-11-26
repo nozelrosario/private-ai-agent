@@ -6,11 +6,17 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.hardware.HardwareBuffer
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.view.Display
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -20,24 +26,56 @@ import java.io.ByteArrayOutputStream
 class AgentAccessibilityService : AccessibilityService() {
 
     private val ownPackageName get() = packageName ?: "com.orailnoor.privateagent"
+    private var keepAwakeOverlayView: View? = null
 
     companion object {
         var instance: AgentAccessibilityService? = null
             private set
-            
+
         var eventListener: ((Map<String, Any>) -> Unit)? = null
         var lastUserInteractionTime: Long = 0L
+        private val keepAwakeOwners = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
         fun isRunning(): Boolean = instance != null
 
         fun isUserActivelyInteracting(windowMs: Long = 30000L): Boolean {
             return (System.currentTimeMillis() - lastUserInteractionTime) < windowMs
         }
+
+        fun acquireKeepAwake(owner: String) {
+            val shouldEnable = synchronized(keepAwakeOwners) {
+                keepAwakeOwners.add(owner)
+                keepAwakeOwners.isNotEmpty()
+            }
+            if (shouldEnable) {
+                instance?.setKeepScreenAwakeOverlay(true)
+            }
+        }
+
+        fun releaseKeepAwake(owner: String) {
+            val shouldKeep = synchronized(keepAwakeOwners) {
+                keepAwakeOwners.remove(owner)
+                keepAwakeOwners.isNotEmpty()
+            }
+            instance?.setKeepScreenAwakeOverlay(shouldKeep)
+        }
+
+        fun hasKeepAwakeOwners(): Boolean = synchronized(keepAwakeOwners) { keepAwakeOwners.isNotEmpty() }
+
+        fun clearAllKeepAwake() {
+            synchronized(keepAwakeOwners) {
+                keepAwakeOwners.clear()
+            }
+            instance?.setKeepScreenAwakeOverlay(false)
+        }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        if (hasKeepAwakeOwners() || MacroForegroundService.isExecutingRoutine) {
+            acquireKeepAwake("fgs_execution")
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -94,6 +132,7 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        setKeepScreenAwakeOverlay(false)
         super.onDestroy()
         instance = null
     }
@@ -478,8 +517,62 @@ class AgentAccessibilityService : AccessibilityService() {
         return performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
     }
 
+    /** Attach or remove an invisible 1x1 FLAG_KEEP_SCREEN_ON overlay so Android never times out or locks mid-task */
+    fun setKeepScreenAwakeOverlay(enabled: Boolean) {
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val wm = getSystemService(WINDOW_SERVICE) as? WindowManager ?: return@post
+                if (enabled) {
+                    if (keepAwakeOverlayView != null) return@post
+                    val view = View(this).apply {
+                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        isClickable = false
+                        isFocusable = false
+                    }
+                    val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
+                    }
+                    val params = WindowManager.LayoutParams(
+                        1,
+                        1,
+                        overlayType,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.START
+                        x = 0
+                        y = 0
+                        // Keep alpha = 1.0f with transparent background so OEM WindowManagers always honor FLAG_KEEP_SCREEN_ON
+                        title = "PrivateAgentKeepAwake"
+                    }
+                    wm.addView(view, params)
+                    keepAwakeOverlayView = view
+                    android.util.Log.d("AgentAccessibility", "Attached invisible FLAG_KEEP_SCREEN_ON overlay")
+                } else {
+                    val view = keepAwakeOverlayView ?: return@post
+                    keepAwakeOverlayView = null
+                    try {
+                        wm.removeViewImmediate(view)
+                        android.util.Log.d("AgentAccessibility", "Removed invisible FLAG_KEEP_SCREEN_ON overlay")
+                    } catch (_: Exception) {
+                        try { wm.removeView(view) } catch (_: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AgentAccessibility", "Keep-awake overlay error: ${e.message}")
+            }
+        }
+    }
+
     /** Lock device screen (requires Android 9+ / API 28) */
     fun lockScreen(): Boolean {
+        clearAllKeepAwake()
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
         } else {

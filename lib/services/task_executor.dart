@@ -82,6 +82,7 @@ Available actions:
 - press_back: {} - Press the back button
 - press_home: {} - Press the home button
 - open_app: {"app_name": "WhatsApp"} - Open an app
+- lock_screen: {} - Lock the phone screen (ONLY use when the user deliberately asks to lock the phone)
 - wait: {} - Wait a moment for content to load
 - done: {} - Task is complete
 
@@ -120,6 +121,15 @@ Rules:
 
   /// Execute a multi-step task with LLM guidance
   Future<String> executeTask(String userGoal) async {
+    await _screenService.setTaskKeepAwake(true, owner: 'task_executor');
+    try {
+      return await _executeTaskInternal(userGoal);
+    } finally {
+      await _screenService.setTaskKeepAwake(false, owner: 'task_executor');
+    }
+  }
+
+  Future<String> _executeTaskInternal(String userGoal) async {
     await ScreenAutomationService.logToNative(
       "[TaskExecutor] executeTask() CALLED with goal: $userGoal",
     );
@@ -612,6 +622,38 @@ Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. 
           success = actionResult.startsWith('Opened');
           break;
 
+        case 'lock_screen':
+          _report('Locking screen as requested...');
+          await _screenService.setTaskKeepAwake(false, owner: 'task_executor');
+          await _screenService.setKeepScreenOn(false);
+          await _screenService.stopExecutionMode(returnToListener: true);
+          await Future.delayed(const Duration(milliseconds: 150));
+          success = await _screenService.lockScreen();
+          actionResult = success ? 'Screen locked' : 'Failed to lock screen';
+          if (success) {
+            executionTrace.add({
+              'step': step + 1,
+              'action': action,
+              'params': params,
+              'reasoning': reasoning,
+              'result': actionResult,
+              'status': 'success',
+              'timestamp': DateTime.now().toIso8601String(),
+            });
+            results.add('Step ${step + 1}: $actionResult ($reasoning)');
+            await TaskHistoryLogger.logTask(
+              userGoal,
+              'Success',
+              totalTokens,
+              step + 1,
+              executionTrace.isNotEmpty ? executionTrace : results,
+            );
+            return reasoning.trim().isEmpty
+                ? 'Screen locked.'
+                : reasoning.trim();
+          }
+          break;
+
         case 'wait':
           await Future.delayed(const Duration(seconds: 1));
           actionResult = 'Waited';
@@ -1050,6 +1092,21 @@ Has the success criteria been completely met?
     AutonomousRoutine routine, {
     bool wasLockedInitially = false,
   }) async {
+    await _screenService.setTaskKeepAwake(true, owner: 'routine_executor');
+    try {
+      return await _executeAutonomousRoutineInternal(
+        routine,
+        wasLockedInitially: wasLockedInitially,
+      );
+    } finally {
+      await _screenService.setTaskKeepAwake(false, owner: 'routine_executor');
+    }
+  }
+
+  Future<String> _executeAutonomousRoutineInternal(
+    AutonomousRoutine routine, {
+    bool wasLockedInitially = false,
+  }) async {
     _cancelled = false;
     final List<String> results = [];
     final List<dynamic> executionTrace = [];
@@ -1345,6 +1402,18 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
         'timestamp': DateTime.now().toIso8601String(),
       });
 
+      if (action == 'lock_screen' && success) {
+        results.add('Screen locked as requested.');
+        await TaskHistoryLogger.logTask(
+          routine.goalPrompt,
+          'Success',
+          totalTokens,
+          step + 1,
+          executionTrace,
+        );
+        return 'Screen locked.';
+      }
+
       if (success) {
         results.add('$action: success');
         consecutiveFailures = 0;
@@ -1445,6 +1514,13 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
         final res = await _appLauncher.openApp(appName);
         return res.startsWith('Opened');
 
+      case 'lock_screen':
+        await _screenService.setTaskKeepAwake(false, owner: 'routine_executor');
+        await _screenService.setKeepScreenOn(false);
+        await _screenService.stopExecutionMode(returnToListener: true);
+        await Future.delayed(const Duration(milliseconds: 150));
+        return await _screenService.lockScreen();
+
       case 'wait':
         await Future.delayed(const Duration(seconds: 1));
         return true;
@@ -1470,6 +1546,8 @@ Step ${step + 1}/$maxSteps. Look at the text dump. What is the single next actio
         return 'Swipe (${params['startX']}, ${params['startY']}) -> (${params['endX']}, ${params['endY']})';
       case 'open_app':
         return 'Open app "${params['app_name'] ?? ''}"';
+      case 'lock_screen':
+        return 'Lock Screen';
       case 'press_back':
         return 'Press Back';
       case 'press_home':

@@ -797,6 +797,21 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         }
 
+                        "setTaskKeepAwake" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: false
+                            val owner = call.argument<String>("owner") ?: "task_executor"
+                            if (enabled) {
+                                AgentAccessibilityService.acquireKeepAwake(owner)
+                                currentActivity?.applyKeepScreenOn(true)
+                            } else {
+                                AgentAccessibilityService.releaseKeepAwake(owner)
+                                if (!AgentAccessibilityService.hasKeepAwakeOwners() && !MacroForegroundService.isExecutingRoutine) {
+                                    currentActivity?.applyKeepScreenOn(false)
+                                }
+                            }
+                            result.success(true)
+                        }
+
                         "canUseFullScreenIntent" -> {
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
@@ -881,6 +896,8 @@ class MainActivity : FlutterActivity() {
                         }
 
                         "lockScreen" -> {
+                            AgentAccessibilityService.clearAllKeepAwake()
+                            currentActivity?.applyKeepScreenOn(false)
                             val service = AgentAccessibilityService.instance
                             if (service == null) {
                                 result.error("SERVICE_NOT_RUNNING", "Accessibility service is not running", null)

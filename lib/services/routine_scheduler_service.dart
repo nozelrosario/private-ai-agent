@@ -232,6 +232,7 @@ class RoutineSchedulerService {
     try {
       // 2. Keep screen on while executing and check lockscreen state
       await _screenService.setKeepScreenOn(true);
+      await _screenService.setTaskKeepAwake(true, owner: 'routine_scheduler');
       wasLockedInitially = await _screenService.isKeyguardLocked();
 
       // 3. Waking screen if display is off
@@ -290,11 +291,12 @@ class RoutineSchedulerService {
       return 'Error: $e';
     } finally {
       // 6. Release keep-screen-on & bright wake lock BEFORE locking screen
+      await _screenService.setTaskKeepAwake(false, owner: 'routine_scheduler');
       await _screenService.setKeepScreenOn(false);
       await _screenService.stopExecutionMode(returnToListener: true);
 
-      // 7. Security restoration: re-lock if originally locked
-      if (wasLockedInitially) {
+      // 7. Security restoration: re-lock if originally locked (unless already locked)
+      if (wasLockedInitially && !(await _screenService.isKeyguardLocked())) {
         try {
           await _screenService.pressHome();
           await Future.delayed(const Duration(milliseconds: 600));

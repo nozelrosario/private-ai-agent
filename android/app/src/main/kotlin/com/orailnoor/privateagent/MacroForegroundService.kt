@@ -143,6 +143,7 @@ class MacroForegroundService : Service() {
                 Log.d(TAG, "Stopping service via ACTION_STOP_SERVICE")
                 isRunning = false
                 isExecutingRoutine = false
+                AgentAccessibilityService.clearAllKeepAwake()
                 MainActivity.currentActivity?.applyKeepScreenOn(false)
                 releaseScreenBrightLock()
                 stopTelegramPoller()
@@ -158,6 +159,7 @@ class MacroForegroundService : Service() {
                 isExecutingRoutine = true
                 acquireLocks()
                 acquireScreenBrightLock()
+                AgentAccessibilityService.acquireKeepAwake("fgs_execution")
                 MainActivity.currentActivity?.applyKeepScreenOn(true)
                 val title = intent?.getStringExtra("routine_title") ?: "Running Autonomous Routine..."
                 val notification = buildExecutionNotification(title)
@@ -168,6 +170,7 @@ class MacroForegroundService : Service() {
                 Log.d(TAG, "Starting listener mode")
                 isRunning = true
                 isExecutingRoutine = false
+                AgentAccessibilityService.releaseKeepAwake("fgs_execution")
                 MainActivity.currentActivity?.applyKeepScreenOn(false)
                 releaseScreenBrightLock()
                 acquireLocks()
@@ -197,6 +200,7 @@ class MacroForegroundService : Service() {
         Log.d(TAG, "MacroForegroundService onDestroy")
         isRunning = false
         isExecutingRoutine = false
+        AgentAccessibilityService.releaseKeepAwake("fgs_execution")
         releaseScreenBrightLock()
         stopTelegramPoller()
         releaseLocks()
@@ -259,11 +263,9 @@ class MacroForegroundService : Service() {
                 )
                 screenBrightWakeLock?.setReferenceCounted(false)
             }
-            if (screenBrightWakeLock?.isHeld == false) {
-                // Keep screen bright for up to 10 minutes during execution
-                screenBrightWakeLock?.acquire(600_000L)
-                Log.d(TAG, "Acquired SCREEN_BRIGHT_WAKE_LOCK for routine execution")
-            }
+            // Refresh bright wake lock up to 10 minutes per task/step
+            screenBrightWakeLock?.acquire(600_000L)
+            Log.d(TAG, "Acquired/refreshed SCREEN_BRIGHT_WAKE_LOCK for routine execution")
         } catch (e: Exception) {
             Log.e(TAG, "Error acquiring screen bright lock: ${e.message}")
         }
@@ -460,6 +462,7 @@ class MacroForegroundService : Service() {
         isExecutingRoutine = true
         acquireLocks()
         acquireScreenBrightLock()
+        AgentAccessibilityService.acquireKeepAwake("fgs_execution")
         val preview = if (text.length > 40) "${text.take(40)}..." else text
         val execNotification = buildExecutionNotification("Telegram: $preview")
         startForeground(NOTIFICATION_ID, execNotification)

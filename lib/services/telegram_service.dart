@@ -268,9 +268,11 @@ class TelegramService {
     final screenService = ScreenAutomationService();
     await screenService.setKeepScreenOn(true);
     await screenService.startExecutionMode('Telegram: ${trimmed.length > 40 ? trimmed.substring(0, 40) : trimmed}');
+    await screenService.setTaskKeepAwake(true, owner: 'telegram_service');
     unawaited(_sendMessage(chatId, '🤖 Received: "$text". Working on it...'));
 
     bool wasLockedInitially = false;
+    bool deliberatelyLocked = false;
     try {
       wasLockedInitially = await screenService.isKeyguardLocked();
 
@@ -304,6 +306,7 @@ class TelegramService {
         }
 
         // 3. Execute the action
+        deliberatelyLocked = action.action == 'lock_screen';
         final result = await _actionHandler.execute(
           action,
           aiService: _aiService,
@@ -325,18 +328,16 @@ class TelegramService {
       onUiMessage?.call('assistant', errMsg);
       await _sendMessage(chatId, errMsg);
     } finally {
-      if (wasLockedInitially) {
+      await screenService.setTaskKeepAwake(false, owner: 'telegram_service');
+      await screenService.setKeepScreenOn(false);
+      await screenService.stopExecutionMode(returnToListener: true);
+      final currentlyLocked = await screenService.isKeyguardLocked();
+      if (wasLockedInitially && !deliberatelyLocked && !currentlyLocked) {
         try {
           await screenService.pressHome();
           await Future.delayed(const Duration(milliseconds: 500));
-        } catch (_) {}
-      }
-      await screenService.setKeepScreenOn(false);
-      await screenService.stopExecutionMode(returnToListener: true);
-      if (wasLockedInitially) {
-        try {
-          await Future.delayed(const Duration(milliseconds: 300));
           await screenService.lockScreen();
+          await Future.delayed(const Duration(milliseconds: 300));
         } catch (_) {}
       }
       await screenService.setShowWhenLocked(true);
