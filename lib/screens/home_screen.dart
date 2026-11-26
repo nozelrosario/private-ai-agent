@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_message.dart';
 import '../services/ai_service.dart';
 import '../services/action_handler.dart';
@@ -16,6 +17,12 @@ import 'task_history_screen.dart';
 import 'skills_personas_screen.dart';
 import '../services/persona_service.dart';
 import '../services/custom_skill_service.dart';
+import '../services/routine_service.dart';
+import '../services/routine_ledger_service.dart';
+import '../services/routine_scheduler_service.dart';
+import '../services/task_executor.dart';
+import '../services/screen_automation_service.dart';
+import '../services/app_launcher_service.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../main.dart';
 import '../config/feature_flags.dart';
@@ -63,13 +70,95 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _initServices() async {
-    await _aiService.init();
-    await CustomSkillService().init();
-    await PersonaService().init();
-    await _notificationService.requestPermission();
-    await _voiceService.init();
-    await _telegramService.init();
-    await _actionHandler.shizuku.checkAvailability();
+    try { await _aiService.init(); } catch (e) { developer.log('AiService init error: $e', name: 'PrivateAgent'); }
+    try { await CustomSkillService().init(); } catch (e) { developer.log('CustomSkillService init error: $e', name: 'PrivateAgent'); }
+    try { await PersonaService().init(); } catch (e) { developer.log('PersonaService init error: $e', name: 'PrivateAgent'); }
+    try { await RoutineService().init(); } catch (e) { developer.log('RoutineService init error: $e', name: 'PrivateAgent'); }
+    try { await RoutineLedgerService().init(); } catch (e) { developer.log('RoutineLedgerService init error: $e', name: 'PrivateAgent'); }
+
+    TaskExecutor? activeRoutineExecutor;
+    try {
+      await RoutineSchedulerService().init(
+        onExecuteRoutine: (routine, {wasLockedInitially = false}) async {
+          activeRoutineExecutor = TaskExecutor(
+            aiService: _aiService,
+            screenService: ScreenAutomationService(),
+            appLauncher: AppLauncherService(),
+            shizukuService: _actionHandler.shizuku,
+            onProgress: (msg) {
+              developer.log('Routine progress: $msg', name: 'PrivateAgent');
+            },
+            onConfirmationRequired: (prompt) async {
+              if (_telegramService.isEnabled) {
+                return await _telegramService.requestConfirmation(prompt);
+              }
+              return true;
+            },
+          );
+          return await activeRoutineExecutor!.executeAutonomousRoutine(
+            routine,
+            wasLockedInitially: wasLockedInitially,
+          );
+        },
+        onCancelExecution: () {
+          activeRoutineExecutor?.cancel();
+        },
+      );
+    } catch (e) {
+      developer.log('RoutineSchedulerService init error: $e', name: 'PrivateAgent');
+    }
+
+    _telegramService.onUiMessage = (role, text) {
+      if (!mounted) return;
+      setState(() {
+        _messages.add(ChatMessage(role: role, content: text));
+      });
+      _scrollToBottom();
+    };
+
+    try {
+      await _telegramService.init();
+    } catch (e) {
+      developer.log('TelegramService init error: $e', name: 'PrivateAgent');
+    }
+
+    // Signal native Android side that Dart MethodChannel handlers are ready, then drain queued triggers
+    final screenService = ScreenAutomationService();
+    await screenService.markDartReady();
+    unawaited(RoutineSchedulerService().drainPendingRoutines());
+    unawaited(_telegramService.checkPendingMessages());
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final bgServiceEnabled = prefs.getBool('background_service_enabled') ?? true;
+      if (bgServiceEnabled || _telegramService.isEnabled) {
+        await screenService.startBackgroundService(
+          botToken: _telegramService.botToken,
+          telegramEnabled: _telegramService.isEnabled,
+        );
+      }
+    } catch (e) {
+      developer.log('Background service start error: $e', name: 'PrivateAgent');
+    }
+
+    // Run secondary UI/helper inits non-blocking so they never stall remote automation or lockscreen startup
+    unawaited(() async {
+      try {
+        await _notificationService.requestPermission().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        developer.log('Notification permission skipped: $e', name: 'PrivateAgent');
+      }
+      try {
+        await _voiceService.init().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        developer.log('VoiceService init skipped: $e', name: 'PrivateAgent');
+      }
+      try {
+        await _actionHandler.shizuku.checkAvailability().timeout(const Duration(seconds: 3));
+      } catch (e) {
+        developer.log('Shizuku check skipped: $e', name: 'PrivateAgent');
+      }
+    }());
 
     if (mounted) {
       setState(() {});
@@ -395,6 +484,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _handleAppForegrounded() async {
     await _updateOverlayState();
     await _importOverlayChatHistory();
+    await RoutineSchedulerService().drainPendingRoutines();
+    await _telegramService.checkPendingMessages();
   }
 
   Future<void> _importOverlayChatHistory() async {
@@ -485,7 +576,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          ScreenAutomationService().moveTaskToBack();
+        }
+      },
+      child: Scaffold(
       backgroundColor: isDark
           ? const Color(0xFF0C0A15)
           : const Color(0xFFFFFFFF),
@@ -596,6 +694,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
               // Active Persona Selector Chips
               _buildPersonaSelectorBar(isDark),
+
+              // Active Routines Banner
+              _buildActiveRoutinesBanner(isDark),
 
               // API key warning banner
               if (!_aiService.isConfigured)
@@ -739,7 +840,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
-    );
+    ));
   }
 
   Widget _buildDrawer(BuildContext context, bool isDark) {
@@ -1185,6 +1286,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildActiveRoutinesBanner(bool isDark) {
+    return ValueListenableBuilder<int>(
+      valueListenable: RoutineService().routinesChangedNotifier,
+      builder: (context, _, __) {
+        final activeRoutines = RoutineService().getActiveRoutines();
+        if (activeRoutines.isEmpty) return const SizedBox.shrink();
+
+        final first = activeRoutines.first;
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.repeat_rounded, size: 16, color: Colors.indigo),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${activeRoutines.length} Active Routine${activeRoutines.length > 1 ? "s" : ""}: ${first.name}',
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w500),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const SkillsPersonasScreen(initialTabIndex: 2),
+                    ),
+                  ).then((_) => setState(() {}));
+                },
+                child: const Text(
+                  'Manage',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.indigo,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

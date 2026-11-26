@@ -1,11 +1,19 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/agent_persona.dart';
 import '../models/custom_skill.dart';
+import '../models/autonomous_routine.dart';
 import '../services/custom_skill_service.dart';
 import '../services/persona_service.dart';
+import '../services/routine_service.dart';
+import '../services/routine_scheduler_service.dart';
+import '../services/screen_automation_service.dart';
 import 'skill_editor_screen.dart';
 import 'persona_editor_screen.dart';
+import 'routine_editor_screen.dart';
 
 class SkillsPersonasScreen extends StatefulWidget {
   final int initialTabIndex;
@@ -21,17 +29,22 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
   late TabController _tabController;
   final CustomSkillService _skillService = CustomSkillService();
   final PersonaService _personaService = PersonaService();
+  final RoutineService _routineService = RoutineService();
+  final RoutineSchedulerService _schedulerService = RoutineSchedulerService();
+  final ScreenAutomationService _screenService = ScreenAutomationService();
 
   List<AgentPersona> _personas = [];
   List<CustomSkill> _skills = [];
+  List<AutonomousRoutine> _routines = [];
   String _activePersonaId = '';
   String _selectedCategory = 'All';
+  String? _triggeringRoutineId;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 2,
+      length: 3,
       vsync: this,
       initialIndex: widget.initialTabIndex,
     );
@@ -48,9 +61,11 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
   Future<void> _loadData() async {
     await _skillService.init();
     await _personaService.init();
+    await _routineService.init();
     setState(() {
       _personas = _personaService.getAllPersonas();
       _skills = _skillService.getAllSkills(includeDisabled: true);
+      _routines = _routineService.getAllRoutines();
       _activePersonaId = _personaService.getActivePersona().id;
     });
   }
@@ -99,21 +114,99 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
     ).then((_) => _loadData());
   }
 
-  // --- SKILLS EXPORT / IMPORT JSON ---
-  void _showExportDialog() {
-    final jsonStr = _skillService.exportSkillsJson();
+  // --- UNIFIED CATALOG EXPORT / IMPORT (FILE & CLIPBOARD) ---
+  void _showCatalogExportDialog({
+    required String title,
+    required String defaultFileName,
+    required String jsonStr,
+  }) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Export Skills Catalog (JSON)'),
+        title: Text(title),
         content: SizedBox(
           width: double.maxFinite,
-          height: 300,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              jsonStr,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            ),
+          height: 320,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      jsonStr,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  FilledButton.icon(
+                    onPressed: () async {
+                      final path = await _screenService.saveJsonFileToDownloads(
+                        defaultFileName,
+                        jsonStr,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(path != null
+                                ? 'Exported file to: $path'
+                                : 'Failed to save file to Downloads'),
+                          ),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.download_rounded, size: 16),
+                    label: const Text('Save to Downloads'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      try {
+                        final tempDir = await getTemporaryDirectory();
+                        final tempFile = File('${tempDir.path}/$defaultFileName');
+                        await tempFile.writeAsString(jsonStr);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        await Share.shareXFiles(
+                          [XFile(tempFile.path, mimeType: 'application/json')],
+                          text: 'PrivateAgent Export: $defaultFileName',
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Share failed: $e')),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.share_rounded, size: 16),
+                    label: const Text('Share File'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: jsonStr));
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('JSON copied to clipboard!')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded, size: 16),
+                    label: const Text('Copy JSON'),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
         actions: [
@@ -121,37 +214,76 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Close'),
           ),
-          FilledButton.icon(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: jsonStr));
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Skills JSON copied to clipboard!')),
-              );
-            },
-            icon: const Icon(Icons.copy_rounded, size: 16),
-            label: const Text('Copy JSON'),
-          ),
         ],
       ),
     );
   }
 
-  void _showImportDialog() {
+  void _showCatalogImportDialog({
+    required String title,
+    required String hintText,
+    required Future<int> Function(String jsonStr) onImport,
+  }) {
     final inputCtrl = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Import Skills from JSON'),
+        title: Text(title),
         content: SizedBox(
           width: double.maxFinite,
-          child: TextField(
-            controller: inputCtrl,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              hintText: 'Paste skills JSON array here...',
-              border: OutlineInputBorder(),
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.icon(
+                onPressed: () async {
+                  try {
+                    final content = await _screenService.pickJsonFile();
+                    if (content == null || content.isEmpty) return;
+                    final count = await onImport(content);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    await _loadData();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Successfully imported $count items from file!'),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Import error: $e')),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.folder_open_rounded, size: 18),
+                label: const Text('Pick File from Device / SD Card'),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Row(
+                  children: [
+                    Expanded(child: Divider()),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8.0),
+                      child: Text('OR PASTE JSON', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    ),
+                    Expanded(child: Divider()),
+                  ],
+                ),
+              ),
+              TextField(
+                controller: inputCtrl,
+                maxLines: 6,
+                decoration: InputDecoration(
+                  hintText: hintText,
+                  border: const OutlineInputBorder(),
+                  contentPadding: const EdgeInsets.all(10),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -161,93 +293,63 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
           ),
           FilledButton(
             onPressed: () async {
-              final count = await _skillService.importSkillsJson(inputCtrl.text.trim());
-              Navigator.pop(ctx);
-              await _loadData();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Successfully imported $count skills!')),
-              );
+              final text = inputCtrl.text.trim();
+              if (text.isEmpty) return;
+              try {
+                final count = await onImport(text);
+                if (ctx.mounted) Navigator.pop(ctx);
+                await _loadData();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Successfully imported $count items!')),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Import error: $e')),
+                  );
+                }
+              }
             },
-            child: const Text('Import'),
+            child: const Text('Import Text'),
           ),
         ],
       ),
+    );
+  }
+
+  // --- SKILLS EXPORT / IMPORT JSON ---
+  void _showExportDialog() {
+    _showCatalogExportDialog(
+      title: 'Export Skills Catalog',
+      defaultFileName: 'privateagent_skills_${DateTime.now().millisecondsSinceEpoch}.json',
+      jsonStr: _skillService.exportSkillsJson(),
+    );
+  }
+
+  void _showImportDialog() {
+    _showCatalogImportDialog(
+      title: 'Import Skills from JSON',
+      hintText: 'Paste skills JSON array here...',
+      onImport: (content) => _skillService.importSkillsJson(content.trim()),
     );
   }
 
   // --- PERSONAS EXPORT / IMPORT JSON ---
   void _showPersonaExportDialog() {
-    final jsonStr = _personaService.exportPersonasJson();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Export Personas (JSON)'),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: 300,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              jsonStr,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          FilledButton.icon(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: jsonStr));
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Personas JSON copied to clipboard!')),
-              );
-            },
-            icon: const Icon(Icons.copy_rounded, size: 16),
-            label: const Text('Copy JSON'),
-          ),
-        ],
-      ),
+    _showCatalogExportDialog(
+      title: 'Export Personas Catalog',
+      defaultFileName: 'privateagent_personas_${DateTime.now().millisecondsSinceEpoch}.json',
+      jsonStr: _personaService.exportPersonasJson(),
     );
   }
 
   void _showPersonaImportDialog() {
-    final inputCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Personas from JSON'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: TextField(
-            controller: inputCtrl,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              hintText: 'Paste personas JSON array here...',
-              border: OutlineInputBorder(),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final count = await _personaService.importPersonasJson(inputCtrl.text.trim());
-              Navigator.pop(ctx);
-              await _loadData();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Successfully imported $count personas!')),
-              );
-            },
-            child: const Text('Import'),
-          ),
-        ],
-      ),
+    _showCatalogImportDialog(
+      title: 'Import Personas from JSON',
+      hintText: 'Paste personas JSON array here...',
+      onImport: (content) => _personaService.importPersonasJson(content.trim()),
     );
   }
 
@@ -291,6 +393,7 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
           tabs: const [
             Tab(icon: Icon(Icons.psychology_rounded), text: 'Agent Personas'),
             Tab(icon: Icon(Icons.auto_stories_rounded), text: 'Skills Library'),
+            Tab(icon: Icon(Icons.repeat_rounded), text: 'Routines'),
           ],
         ),
         actions: [
@@ -302,6 +405,8 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
               if (val == 'import_skills') _showImportDialog();
               if (val == 'export_personas') _showPersonaExportDialog();
               if (val == 'import_personas') _showPersonaImportDialog();
+              if (val == 'export_routines') _showRoutineExportDialog();
+              if (val == 'import_routines') _showRoutineImportDialog();
               if (val == 'reset_defaults') _confirmResetDefaults();
             },
             itemBuilder: (ctx) => [
@@ -324,6 +429,15 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
+                value: 'export_routines',
+                child: Row(children: [Icon(Icons.file_download_outlined, size: 18), SizedBox(width: 8), Text('Export Routines JSON')]),
+              ),
+              const PopupMenuItem(
+                value: 'import_routines',
+                child: Row(children: [Icon(Icons.file_upload_outlined, size: 18), SizedBox(width: 8), Text('Import Routines JSON')]),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
                 value: 'reset_defaults',
                 child: Row(children: [Icon(Icons.restore_rounded, size: 18, color: Colors.orange), SizedBox(width: 8), Text('Reset All Defaults')]),
               ),
@@ -336,25 +450,41 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
         children: [
           _buildPersonasTab(),
           _buildSkillsTab(),
+          _buildRoutinesTab(),
         ],
       ),
       floatingActionButton: AnimatedBuilder(
         animation: _tabController,
         builder: (context, _) {
-          final isPersonas = (_tabController.animation?.value ?? _tabController.index).round() == 0;
+          final currentIdx = (_tabController.animation?.value ?? _tabController.index).round();
+          String label = 'New Persona';
+          IconData icon = Icons.person_add_outlined;
+          if (currentIdx == 1) {
+            label = 'New Skill';
+            icon = Icons.add_task_rounded;
+          } else if (currentIdx == 2) {
+            label = 'New Routine';
+            icon = Icons.add_alarm_rounded;
+          }
+
           return FloatingActionButton.extended(
             onPressed: () {
-              if (isPersonas) {
+              if (currentIdx == 0) {
                 _openPersonaDialog();
-              } else {
+              } else if (currentIdx == 1) {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const SkillEditorScreen()),
                 ).then((_) => _loadData());
+              } else {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RoutineEditorScreen()),
+                ).then((_) => _loadData());
               }
             },
-            icon: Icon(isPersonas ? Icons.person_add_outlined : Icons.add_task_rounded),
-            label: Text(isPersonas ? 'New Persona' : 'New Skill'),
+            icon: Icon(icon),
+            label: Text(label),
           );
         },
       ),
@@ -622,6 +752,297 @@ class _SkillsPersonasScreenState extends State<SkillsPersonasScreen>
           ),
         ),
       ],
+    );
+  }
+
+  void _showRoutineExportDialog() {
+    _showCatalogExportDialog(
+      title: 'Export Routines Catalog',
+      defaultFileName: 'privateagent_routines_${DateTime.now().millisecondsSinceEpoch}.json',
+      jsonStr: _routineService.exportCatalogJson(),
+    );
+  }
+
+  void _showRoutineImportDialog() {
+    _showCatalogImportDialog(
+      title: 'Import Routines from JSON',
+      hintText: 'Paste routines JSON array here...',
+      onImport: (content) async {
+        final count = await _routineService.importCatalogJson(content.trim());
+        await _schedulerService.syncAllSchedules();
+        return count;
+      },
+    );
+  }
+
+  Widget _buildRoutinesTab() {
+    if (_routines.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.repeat_rounded,
+                  size: 64, color: Colors.grey.withOpacity(0.5)),
+              const SizedBox(height: 16),
+              const Text('No Autonomous Routines Yet',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              const Text(
+                'Create a routine to periodically automate WhatsApp replies, notifications, or custom device loops.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const RoutineEditorScreen()),
+                  ).then((_) => _loadData());
+                },
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Create Starter Routine'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+      itemCount: _routines.length,
+      itemBuilder: (context, index) {
+        final routine = _routines[index];
+        final isTriggering = _triggeringRoutineId == routine.id;
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 14),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: routine.isEnabled
+                            ? Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withOpacity(0.12)
+                            : Colors.grey.withOpacity(0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.repeat_rounded,
+                        color: routine.isEnabled
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.grey,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            routine.name,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            routine.description.isNotEmpty
+                                ? routine.description
+                                : routine.goalPrompt,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: routine.isEnabled,
+                      onChanged: (val) async {
+                        await _routineService.toggleRoutine(routine.id, val);
+                        if (val) {
+                          await _schedulerService.scheduleRoutine(
+                              routine.copyWith(isEnabled: true));
+                        } else {
+                          await _schedulerService.cancelRoutine(routine.id);
+                        }
+                        await _loadData();
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    Chip(
+                      avatar: const Icon(Icons.person_pin_rounded, size: 14),
+                      label: Text(routine.personaId,
+                          style: const TextStyle(fontSize: 11)),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    Chip(
+                      avatar: Icon(
+                        routine.executionMode == RoutineExecutionMode.autonomous
+                            ? Icons.bolt_rounded
+                            : Icons.verified_user_rounded,
+                        size: 14,
+                        color: routine.executionMode ==
+                                RoutineExecutionMode.autonomous
+                            ? Colors.amber
+                            : Colors.blue,
+                      ),
+                      label: Text(
+                        routine.executionMode == RoutineExecutionMode.autonomous
+                            ? 'Auto-Reply'
+                            : 'Supervised',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    Chip(
+                      avatar: const Icon(Icons.timer_outlined, size: 14),
+                      label: Text(
+                        routine.schedule.type == ScheduleType.interval
+                            ? 'Every ${routine.schedule.intervalMinutes}m'
+                            : 'Daily ${routine.schedule.dailyHour}:${routine.schedule.dailyMinute}',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    if (routine.lastRunStatus != null)
+                      Chip(
+                        avatar: Icon(
+                          routine.lastRunStatus == 'success'
+                              ? Icons.check_circle_outline_rounded
+                              : Icons.error_outline_rounded,
+                          size: 14,
+                          color: routine.lastRunStatus == 'success'
+                              ? Colors.green
+                              : Colors.redAccent,
+                        ),
+                        label: Text(
+                          'Last: ${routine.lastRunStatus}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: routine.lastRunStatus == 'success'
+                                ? Colors.green
+                                : Colors.redAccent,
+                          ),
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                  ],
+                ),
+                const Divider(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: isTriggering
+                          ? null
+                          : () async {
+                              setState(
+                                  () => _triggeringRoutineId = routine.id);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                    content: Text(
+                                        'Triggering routine: "${routine.name}"...')),
+                              );
+                              final res =
+                                  await _schedulerService.triggerRoutine(
+                                routine.id,
+                                isManual: true,
+                              );
+                              if (mounted) {
+                                setState(() => _triggeringRoutineId = null);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text('Routine completed: $res')),
+                                );
+                                await _loadData();
+                              }
+                            },
+                      icon: isTriggering
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.play_arrow_rounded, size: 16),
+                      label: Text(isTriggering ? 'Running...' : 'Run Now'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                RoutineEditorScreen(routineToEdit: routine),
+                          ),
+                        ).then((_) => _loadData());
+                      },
+                      icon: const Icon(Icons.edit_rounded, size: 16),
+                      label: const Text('Edit'),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline_rounded,
+                          size: 18, color: Colors.redAccent),
+                      tooltip: 'Delete Routine',
+                      onPressed: () async {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Delete Routine?'),
+                            content: Text(
+                                'Are you sure you want to delete "${routine.name}"?'),
+                            actions: [
+                              TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Cancel')),
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text('Delete',
+                                    style: TextStyle(color: Colors.red)),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirm == true) {
+                          await _schedulerService.cancelRoutine(routine.id);
+                          await _routineService.deleteRoutine(routine.id);
+                          await _loadData();
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
