@@ -567,6 +567,51 @@ class ScreenAutomationService {
     }
   }
 
+  /// Enable or disable setShowWhenLocked so lockscreen UI can be uncovered when swiping/unlocking
+  Future<bool> setShowWhenLocked(bool enabled) async {
+    try {
+      return await _invoke<bool>('setShowWhenLocked', {'enabled': enabled}) ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if Display Over Other Apps (SYSTEM_ALERT_WINDOW) is granted
+  Future<bool> checkOverlayPermission() async {
+    try {
+      return await _invoke<bool>('checkOverlayPermission') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Open Android system screen to grant Display Over Other Apps permission
+  Future<bool> requestOverlayPermission() async {
+    try {
+      return await _invoke<bool>('requestOverlayPermission') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if app can show Full Screen Intents over lockscreen (Android 14+)
+  Future<bool> canUseFullScreenIntent() async {
+    try {
+      return await _invoke<bool>('canUseFullScreenIntent') ?? true;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /// Open Android system settings to allow Full Screen Intents over lockscreen (Android 14+)
+  Future<bool> requestFullScreenIntentPermission() async {
+    try {
+      return await _invoke<bool>('requestFullScreenIntentPermission') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// Launch an application by package name directly from native Android context
   Future<bool> launchPackage(String packageName) async {
     try {

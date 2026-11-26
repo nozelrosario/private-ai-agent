@@ -57,6 +57,8 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _backgroundServiceEnabled = true;
   bool _isIgnoringBatteryOptimizations = false;
   bool _canScheduleExactAlarms = true;
+  bool _canDrawOverlays = false;
+  bool _canUseFullScreenIntent = true;
 
   final PersonaService _personaService = PersonaService();
   final CustomSkillService _customSkillService = CustomSkillService();
@@ -107,11 +109,15 @@ class _SettingsScreenState extends State<SettingsScreen>
     final bgEnabled = prefs.getBool('background_service_enabled') ?? true;
     final isIgnoring = await widget.screenAutomationService.isIgnoringBatteryOptimizations();
     final canAlarm = await widget.screenAutomationService.canScheduleExactAlarms();
+    final canOverlays = await widget.screenAutomationService.checkOverlayPermission();
+    final canFullScreen = await widget.screenAutomationService.canUseFullScreenIntent();
     if (mounted) {
       setState(() {
         _backgroundServiceEnabled = bgEnabled;
         _isIgnoringBatteryOptimizations = isIgnoring;
         _canScheduleExactAlarms = canAlarm;
+        _canDrawOverlays = canOverlays;
+        _canUseFullScreenIntent = canFullScreen;
       });
     }
   }
@@ -119,10 +125,14 @@ class _SettingsScreenState extends State<SettingsScreen>
   Future<void> _checkBatteryOptimizationStatus() async {
     final isIgnoring = await widget.screenAutomationService.isIgnoringBatteryOptimizations();
     final canAlarm = await widget.screenAutomationService.canScheduleExactAlarms();
+    final canOverlays = await widget.screenAutomationService.checkOverlayPermission();
+    final canFullScreen = await widget.screenAutomationService.canUseFullScreenIntent();
     if (mounted) {
       setState(() {
         _isIgnoringBatteryOptimizations = isIgnoring;
         _canScheduleExactAlarms = canAlarm;
+        _canDrawOverlays = canOverlays;
+        _canUseFullScreenIntent = canFullScreen;
       });
     }
   }
@@ -867,7 +877,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                   setState(() => _backgroundServiceEnabled = val);
                   _autoSave();
                   if (val) {
-                    await widget.screenAutomationService.startBackgroundService();
+                    await widget.screenAutomationService.startBackgroundService(
+                      botToken: _telegramTokenController.text.trim(),
+                      telegramEnabled: _telegramEnabled,
+                    );
                   } else {
                     await widget.screenAutomationService.stopBackgroundService();
                   }
@@ -952,6 +965,86 @@ class _SettingsScreenState extends State<SettingsScreen>
                         ),
                         onPressed: () async {
                           await widget.screenAutomationService.requestExactAlarmPermission();
+                          await Future.delayed(const Duration(seconds: 1));
+                          _checkBatteryOptimizationStatus();
+                        },
+                        child: const Text('Grant'),
+                      ),
+              ),
+              const Divider(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  _canDrawOverlays
+                      ? Icons.layers_rounded
+                      : Icons.layers_clear_rounded,
+                  color: _canDrawOverlays ? Colors.green : Colors.orange,
+                ),
+                title: const Text('Display Over Other Apps'),
+                subtitle: Text(
+                  _canDrawOverlays
+                      ? 'Granted: agent can launch over background/lockscreen restrictions'
+                      : 'Recommended on Vivo/Xiaomi/Android 10+: allows background wakeups',
+                ),
+                trailing: _canDrawOverlays
+                    ? const Chip(
+                        label: Text(
+                          'Granted',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: Color(0x224CAF50),
+                      )
+                    : ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          textStyle: const TextStyle(fontSize: 12),
+                        ),
+                        onPressed: () async {
+                          await widget.screenAutomationService.requestOverlayPermission();
+                          await Future.delayed(const Duration(seconds: 1));
+                          _checkBatteryOptimizationStatus();
+                        },
+                        child: const Text('Grant'),
+                      ),
+              ),
+              const Divider(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  _canUseFullScreenIntent
+                      ? Icons.fullscreen_rounded
+                      : Icons.fullscreen_exit_rounded,
+                  color: _canUseFullScreenIntent ? Colors.green : Colors.orange,
+                ),
+                title: const Text('Full-Screen Lockscreen Wakeups'),
+                subtitle: Text(
+                  _canUseFullScreenIntent
+                      ? 'Granted: routines & Telegram commands can wake over lockscreen'
+                      : 'Required on Android 14+: allow Full Screen Notifications',
+                ),
+                trailing: _canUseFullScreenIntent
+                    ? const Chip(
+                        label: Text(
+                          'Granted',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: Color(0x224CAF50),
+                      )
+                    : ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          textStyle: const TextStyle(fontSize: 12),
+                        ),
+                        onPressed: () async {
+                          await widget.screenAutomationService.requestFullScreenIntentPermission();
                           await Future.delayed(const Duration(seconds: 1));
                           _checkBatteryOptimizationStatus();
                         },

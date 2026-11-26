@@ -24,9 +24,9 @@ class MainActivity : FlutterActivity() {
     private var overlayView: View? = null
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        handleLockscreenFlags(keepAwake = hasPendingTriggers(this, intent))
         super.onCreate(savedInstanceState)
         currentActivity = this
-        handleLockscreenFlags()
         handleIntent(intent)
     }
 
@@ -34,11 +34,22 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         currentActivity = this
         setIntent(intent)
-        handleLockscreenFlags()
+        handleLockscreenFlags(keepAwake = hasPendingTriggers(this, intent))
         handleIntent(intent)
     }
 
-    private fun handleLockscreenFlags() {
+    override fun onResume() {
+        super.onResume()
+        currentActivity = this
+        if (hasPendingTriggers(this, intent)) {
+            handleLockscreenFlags(keepAwake = true)
+        }
+    }
+
+    private fun handleLockscreenFlags(keepAwake: Boolean = false) {
+        if (keepAwake) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -48,6 +59,20 @@ class MainActivity : FlutterActivity() {
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
+        }
+    }
+
+    fun applyShowWhenLocked(enabled: Boolean) {
+        runOnUiThread {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(enabled)
+            } else if (enabled) {
+                @Suppress("DEPRECATION")
+                window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+            } else {
+                @Suppress("DEPRECATION")
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+            }
         }
     }
 
@@ -198,9 +223,117 @@ class MainActivity : FlutterActivity() {
         private val pendingRoutineIds = java.util.Collections.synchronizedList(mutableListOf<String>())
         private val pendingTelegramMessages = java.util.Collections.synchronizedList(mutableListOf<Map<String, String>>())
         private val seenTelegramMsgIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+        private const val PREFS_NAME = "PrivateAgentPrefs"
+        private const val KEY_TELEGRAM_QUEUE = "pending_telegram_queue"
+        private const val KEY_ROUTINE_QUEUE = "pending_routine_queue"
         const val FILE_PICKER_REQUEST_CODE = 4123
 
+        fun hasPendingTriggers(context: android.content.Context, intent: Intent?): Boolean {
+            loadPersistedQueues(context)
+            val hasIntentTrigger = !(intent?.getStringExtra("telegram_text").isNullOrEmpty()) ||
+                !(intent?.getStringExtra("trigger_routine_id").isNullOrEmpty())
+            return hasIntentTrigger ||
+                synchronized(pendingTelegramMessages) { pendingTelegramMessages.isNotEmpty() } ||
+                synchronized(pendingRoutineIds) { pendingRoutineIds.isNotEmpty() }
+        }
+
+        private fun persistTelegramQueue(context: android.content.Context) {
+            try {
+                val arr = org.json.JSONArray()
+                synchronized(pendingTelegramMessages) {
+                    for (m in pendingTelegramMessages) {
+                        val obj = org.json.JSONObject().apply {
+                            put("chatId", m["chatId"] ?: "")
+                            put("text", m["text"] ?: "")
+                            put("messageId", m["messageId"] ?: "")
+                        }
+                        arr.put(obj)
+                    }
+                }
+                context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_TELEGRAM_QUEUE, arr.toString())
+                    .commit()
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to persist telegram queue: ${e.message}")
+            }
+        }
+
+        private fun persistRoutineQueue(context: android.content.Context) {
+            try {
+                val arr = org.json.JSONArray()
+                synchronized(pendingRoutineIds) {
+                    for (id in pendingRoutineIds) {
+                        arr.put(id)
+                    }
+                }
+                context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_ROUTINE_QUEUE, arr.toString())
+                    .commit()
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to persist routine queue: ${e.message}")
+            }
+        }
+
+        private fun loadPersistedQueues(context: android.content.Context) {
+            try {
+                val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val tgJson = prefs.getString(KEY_TELEGRAM_QUEUE, null)
+                if (!tgJson.isNullOrEmpty()) {
+                    val arr = org.json.JSONArray(tgJson)
+                    synchronized(pendingTelegramMessages) {
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            val cId = obj.optString("chatId", "")
+                            val txt = obj.optString("text", "")
+                            val mId = obj.optString("messageId", "")
+                            if (cId.isNotEmpty() && txt.isNotEmpty()) {
+                                val exists = pendingTelegramMessages.any { it["messageId"] == mId && mId.isNotEmpty() }
+                                if (!exists && (mId.isEmpty() || !seenTelegramMsgIds.contains(mId))) {
+                                    pendingTelegramMessages.add(mapOf("chatId" to cId, "text" to txt, "messageId" to mId))
+                                }
+                            }
+                        }
+                    }
+                }
+                val rJson = prefs.getString(KEY_ROUTINE_QUEUE, null)
+                if (!rJson.isNullOrEmpty()) {
+                    val arr = org.json.JSONArray(rJson)
+                    synchronized(pendingRoutineIds) {
+                        for (i in 0 until arr.length()) {
+                            val id = arr.optString(i, "")
+                            if (id.isNotEmpty() && !pendingRoutineIds.contains(id)) {
+                                pendingRoutineIds.add(id)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to load persisted queues: ${e.message}")
+            }
+        }
+
+        private fun removePendingTelegramMessage(context: android.content.Context, messageId: String) {
+            synchronized(pendingTelegramMessages) {
+                if (messageId.isNotEmpty()) {
+                    pendingTelegramMessages.removeAll { it["messageId"] == messageId }
+                } else if (pendingTelegramMessages.isNotEmpty()) {
+                    pendingTelegramMessages.removeAt(0)
+                }
+            }
+            persistTelegramQueue(context)
+        }
+
+        private fun removePendingRoutineId(context: android.content.Context, routineId: String) {
+            synchronized(pendingRoutineIds) {
+                pendingRoutineIds.removeAll { it == routineId }
+            }
+            persistRoutineQueue(context)
+        }
+
         fun dispatchTelegramMessage(context: android.content.Context, chatId: String, text: String, messageId: String) {
+            val appCtx = context.applicationContext
             val msgMap = mapOf("chatId" to chatId, "text" to text, "messageId" to messageId)
             val alreadySeen = if (messageId.isNotEmpty()) !seenTelegramMsgIds.add(messageId) else false
             if (alreadySeen) {
@@ -208,78 +341,107 @@ class MainActivity : FlutterActivity() {
                 return
             }
 
+            // Always persist BEFORE attempting live push so freeze/kill can never lose the trigger
+            synchronized(pendingTelegramMessages) {
+                pendingTelegramMessages.add(msgMap)
+            }
+            persistTelegramQueue(appCtx)
+
+            val launchIntent = Intent(appCtx, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                putExtra("telegram_chat_id", chatId)
+                putExtra("telegram_text", text)
+                putExtra("telegram_msg_id", messageId)
+            }
+            try {
+                appCtx.startActivity(launchIntent)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "startActivity for Telegram failed: ${e.message}")
+            }
+
             if (isDartReady && channelSink != null && currentActivity != null) {
-                android.util.Log.d("MainActivity", "Dart ready; bringing MainActivity to front and invoking onTelegramMessageReceived")
-                val launchIntent = Intent(context, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                }
-                context.startActivity(launchIntent)
+                android.util.Log.d("MainActivity", "Dart ready; pushing onTelegramMessageReceived with ACK")
+                currentActivity?.applyKeepScreenOn(true)
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     if (isDartReady && channelSink != null) {
-                        channelSink?.invokeMethod("onTelegramMessageReceived", msgMap)
-                    } else {
-                        synchronized(pendingTelegramMessages) {
-                            pendingTelegramMessages.add(msgMap)
-                        }
+                        channelSink?.invokeMethod("onTelegramMessageReceived", msgMap, object : MethodChannel.Result {
+                            override fun success(res: Any?) {
+                                removePendingTelegramMessage(appCtx, messageId)
+                            }
+                            override fun error(code: String, msg: String?, details: Any?) {
+                                android.util.Log.w("MainActivity", "Dart ACK error for telegram $messageId: $msg")
+                            }
+                            override fun notImplemented() {
+                                android.util.Log.w("MainActivity", "Dart handler notImplemented for telegram $messageId")
+                            }
+                        })
                     }
                 }
             } else {
-                android.util.Log.d("MainActivity", "Dart not ready (isDartReady=$isDartReady); queuing Telegram message and launching MainActivity")
-                synchronized(pendingTelegramMessages) {
-                    pendingTelegramMessages.add(msgMap)
-                }
-                val launchIntent = Intent(context, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    putExtra("telegram_chat_id", chatId)
-                    putExtra("telegram_text", text)
-                    putExtra("telegram_msg_id", messageId)
-                }
-                context.startActivity(launchIntent)
+                android.util.Log.d("MainActivity", "Dart not ready (isDartReady=$isDartReady); persisted in queue for startup drain")
             }
         }
 
         fun dispatchRoutineTrigger(context: android.content.Context, routineId: String) {
-            if (isDartReady && channelSink != null && currentActivity != null) {
-                android.util.Log.d("MainActivity", "Dart ready; bringing MainActivity to front and invoking onRoutineTriggered")
-                val launchIntent = Intent(context, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            val appCtx = context.applicationContext
+            synchronized(pendingRoutineIds) {
+                if (!pendingRoutineIds.contains(routineId)) {
+                    pendingRoutineIds.add(routineId)
                 }
-                context.startActivity(launchIntent)
+            }
+            persistRoutineQueue(appCtx)
+
+            val launchIntent = Intent(appCtx, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                putExtra("trigger_routine_id", routineId)
+            }
+            try {
+                appCtx.startActivity(launchIntent)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "startActivity for routine failed: ${e.message}")
+            }
+
+            if (isDartReady && channelSink != null && currentActivity != null) {
+                android.util.Log.d("MainActivity", "Dart ready; pushing onRoutineTriggered with ACK")
+                currentActivity?.applyKeepScreenOn(true)
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     if (isDartReady && channelSink != null) {
-                        channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
-                    } else {
-                        synchronized(pendingRoutineIds) {
-                            if (!pendingRoutineIds.contains(routineId)) {
-                                pendingRoutineIds.add(routineId)
+                        channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId), object : MethodChannel.Result {
+                            override fun success(res: Any?) {
+                                removePendingRoutineId(appCtx, routineId)
                             }
-                        }
+                            override fun error(code: String, msg: String?, details: Any?) {
+                                android.util.Log.w("MainActivity", "Dart ACK error for routine $routineId: $msg")
+                            }
+                            override fun notImplemented() {
+                                android.util.Log.w("MainActivity", "Dart handler notImplemented for routine $routineId")
+                            }
+                        })
                     }
                 }
             } else {
-                android.util.Log.d("MainActivity", "Dart not ready; queuing routine trigger $routineId and launching MainActivity")
-                synchronized(pendingRoutineIds) {
-                    if (!pendingRoutineIds.contains(routineId)) {
-                        pendingRoutineIds.add(routineId)
-                    }
-                }
-                val launchIntent = Intent(context, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    putExtra("trigger_routine_id", routineId)
-                }
-                context.startActivity(launchIntent)
+                android.util.Log.d("MainActivity", "Dart not ready; persisted routine $routineId for startup drain")
             }
         }
 
         private fun deliverOrQueueRoutine(routineId: String) {
-            if (isDartReady && channelSink != null) {
-                channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId))
-            } else {
+            val appCtx = currentActivity?.applicationContext
+            if (appCtx != null) {
                 synchronized(pendingRoutineIds) {
                     if (!pendingRoutineIds.contains(routineId)) {
                         pendingRoutineIds.add(routineId)
                     }
                 }
+                persistRoutineQueue(appCtx)
+            }
+            if (isDartReady && channelSink != null && appCtx != null) {
+                channelSink?.invokeMethod("onRoutineTriggered", mapOf("routine_id" to routineId), object : MethodChannel.Result {
+                    override fun success(res: Any?) {
+                        removePendingRoutineId(appCtx, routineId)
+                    }
+                    override fun error(code: String, msg: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
             }
         }
 
@@ -288,12 +450,21 @@ class MainActivity : FlutterActivity() {
                 return
             }
             val msgMap = mapOf("chatId" to chatId, "text" to text, "messageId" to messageId)
-            if (isDartReady && channelSink != null) {
-                channelSink?.invokeMethod("onTelegramMessageReceived", msgMap)
-            } else {
+            val appCtx = currentActivity?.applicationContext
+            if (appCtx != null) {
                 synchronized(pendingTelegramMessages) {
                     pendingTelegramMessages.add(msgMap)
                 }
+                persistTelegramQueue(appCtx)
+            }
+            if (isDartReady && channelSink != null && appCtx != null) {
+                channelSink?.invokeMethod("onTelegramMessageReceived", msgMap, object : MethodChannel.Result {
+                    override fun success(res: Any?) {
+                        removePendingTelegramMessage(appCtx, messageId)
+                    }
+                    override fun error(code: String, msg: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
             }
         }
 
@@ -563,34 +734,42 @@ class MainActivity : FlutterActivity() {
                         }
 
                         "getPendingRoutine" -> {
+                            loadPersistedQueues(context)
                             val rId = synchronized(pendingRoutineIds) {
                                 if (pendingRoutineIds.isNotEmpty()) pendingRoutineIds.removeAt(0) else null
                             }
+                            persistRoutineQueue(context)
                             result.success(rId)
                         }
 
                         "getPendingRoutines" -> {
+                            loadPersistedQueues(context)
                             val list = synchronized(pendingRoutineIds) {
                                 val copy = pendingRoutineIds.toList()
                                 pendingRoutineIds.clear()
                                 copy
                             }
+                            persistRoutineQueue(context)
                             result.success(list)
                         }
 
                         "getPendingTelegramMessage" -> {
+                            loadPersistedQueues(context)
                             val msg = synchronized(pendingTelegramMessages) {
                                 if (pendingTelegramMessages.isNotEmpty()) pendingTelegramMessages.removeAt(0) else null
                             }
+                            persistTelegramQueue(context)
                             result.success(msg)
                         }
 
                         "getPendingTelegramMessages" -> {
+                            loadPersistedQueues(context)
                             val list = synchronized(pendingTelegramMessages) {
                                 val copy = pendingTelegramMessages.toList()
                                 pendingTelegramMessages.clear()
                                 copy
                             }
+                            persistTelegramQueue(context)
                             result.success(list)
                         }
 
@@ -610,6 +789,34 @@ class MainActivity : FlutterActivity() {
                             val enabled = call.argument<Boolean>("enabled") ?: false
                             currentActivity?.applyKeepScreenOn(enabled)
                             result.success(true)
+                        }
+
+                        "setShowWhenLocked" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: true
+                            currentActivity?.applyShowWhenLocked(enabled)
+                            result.success(true)
+                        }
+
+                        "canUseFullScreenIntent" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                                result.success(nm?.canUseFullScreenIntent() ?: true)
+                            } else {
+                                result.success(true)
+                            }
+                        }
+
+                        "requestFullScreenIntentPermission" -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                                result.success(true)
+                            } else {
+                                result.success(true)
+                            }
                         }
 
                         "launchPackage" -> {

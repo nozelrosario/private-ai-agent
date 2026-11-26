@@ -50,13 +50,13 @@ class RoutineSchedulerService {
           if (routineId.isNotEmpty) {
             unawaited(triggerRoutine(routineId));
           }
-          break;
+          return true;
         case 'onRoutineStopped':
           cancelActiveRoutine();
-          break;
+          return true;
         case 'onBackgroundServiceStopped':
           debugPrint('Background service stopped by user notification action');
-          break;
+          return true;
         case 'onTelegramMessageReceived':
           final chatId = call.arguments['chatId'] as String? ?? '';
           final text = call.arguments['text'] as String? ?? '';
@@ -64,8 +64,9 @@ class RoutineSchedulerService {
           if (chatId.isNotEmpty && text.isNotEmpty) {
             onTelegramMessageCallback?.call(chatId, text, messageId: msgId);
           }
-          break;
+          return true;
       }
+      return null;
     });
 
     _initialized = true;
@@ -288,18 +289,20 @@ class RoutineSchedulerService {
       }
       return 'Error: $e';
     } finally {
-      // 6. Security restoration: re-lock if originally locked
+      // 6. Release keep-screen-on & bright wake lock BEFORE locking screen
+      await _screenService.setKeepScreenOn(false);
+      await _screenService.stopExecutionMode(returnToListener: true);
+
+      // 7. Security restoration: re-lock if originally locked
       if (wasLockedInitially) {
         try {
           await _screenService.pressHome();
-          await Future.delayed(const Duration(milliseconds: 1000));
+          await Future.delayed(const Duration(milliseconds: 600));
           await _screenService.lockScreen();
+          await Future.delayed(const Duration(milliseconds: 300));
         } catch (_) {}
       }
-
-      // 7. Stop Execution Mode and return to persistent background listener & release WakeLock
-      await _screenService.stopExecutionMode(returnToListener: true);
-      await _screenService.setKeepScreenOn(false);
+      await _screenService.setShowWhenLocked(true);
 
       _isRoutineRunning = false;
       _activeRunningRoutineId = null;

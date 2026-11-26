@@ -263,14 +263,16 @@ class TelegramService {
       return;
     }
 
-    // Surface incoming command in UI & acknowledge receipt on Telegram
+    // Surface incoming command in UI & elevate wake/execution lock FIRST before network calls
     onUiMessage?.call('user', '📩 [Telegram] $text');
-    await _sendMessage(chatId, '🤖 Received: "$text". Working on it...');
-
     final screenService = ScreenAutomationService();
+    await screenService.setKeepScreenOn(true);
+    await screenService.startExecutionMode('Telegram: ${trimmed.length > 40 ? trimmed.substring(0, 40) : trimmed}');
+    unawaited(_sendMessage(chatId, '🤖 Received: "$text". Working on it...'));
+
+    bool wasLockedInitially = false;
     try {
-      // Keep screen alive while evaluating and running the command
-      await screenService.setKeepScreenOn(true);
+      wasLockedInitially = await screenService.isKeyguardLocked();
 
       // 1. Send text to AI
       final aiResponse = await _aiService.sendMessage(text);
@@ -279,51 +281,40 @@ class TelegramService {
       final action = _aiService.parseAction(aiResponse);
 
       if (action != null) {
-        bool wasLockedInitially = false;
-        try {
-          await screenService.startExecutionMode('Telegram: $trimmed');
-          wasLockedInitially = await screenService.isKeyguardLocked();
-          final isInteractive = await screenService.isScreenInteractive();
-          if (!isInteractive || wasLockedInitially) {
-            await screenService.wakeScreen();
-            await screenService.dismissKeyguard();
-            await Future.delayed(const Duration(milliseconds: 500));
-            if (await screenService.isKeyguardLocked()) {
-              await screenService.swipe(540, 1800, 540, 400);
-              await Future.delayed(const Duration(milliseconds: 700));
-            }
-          }
-
+        final isInteractive = await screenService.isScreenInteractive();
+        if (!isInteractive || wasLockedInitially) {
+          await screenService.wakeScreen();
+          await screenService.dismissKeyguard();
+          await Future.delayed(const Duration(milliseconds: 500));
           if (await screenService.isKeyguardLocked()) {
-            const lockedMsg =
-                '🔒 Device is locked with a secure PIN/Pattern and could not be unlocked automatically.';
-            onUiMessage?.call('assistant', lockedMsg);
-            await _sendMessage(chatId, lockedMsg);
-            return;
+            // Uncover OS lockscreen underneath MainActivity so accessibility swipe can dismiss swipe-lock
+            await screenService.setShowWhenLocked(false);
+            await Future.delayed(const Duration(milliseconds: 400));
+            await screenService.swipe(540, 1800, 540, 400);
+            await Future.delayed(const Duration(milliseconds: 700));
           }
-
-          // 3. Execute the action
-          final result = await _actionHandler.execute(
-            action,
-            aiService: _aiService,
-            onProgress: (msg) {
-              onUiMessage?.call('assistant', '⏳ $msg');
-              _sendMessage(chatId, '⏳ $msg');
-            },
-          );
-          final doneMsg = '✅ ${result.details ?? "Done"}';
-          onUiMessage?.call('assistant', doneMsg);
-          await _sendMessage(chatId, doneMsg);
-        } finally {
-          if (wasLockedInitially) {
-            try {
-              await screenService.pressHome();
-              await Future.delayed(const Duration(milliseconds: 1000));
-              await screenService.lockScreen();
-            } catch (_) {}
-          }
-          await screenService.stopExecutionMode(returnToListener: true);
         }
+
+        if (await screenService.isKeyguardLocked()) {
+          const lockedMsg =
+              '🔒 Device is locked with a secure PIN/Pattern and could not be unlocked automatically.';
+          onUiMessage?.call('assistant', lockedMsg);
+          await _sendMessage(chatId, lockedMsg);
+          return;
+        }
+
+        // 3. Execute the action
+        final result = await _actionHandler.execute(
+          action,
+          aiService: _aiService,
+          onProgress: (msg) {
+            onUiMessage?.call('assistant', '⏳ $msg');
+            _sendMessage(chatId, '⏳ $msg');
+          },
+        );
+        final doneMsg = '✅ ${result.details ?? "Done"}';
+        onUiMessage?.call('assistant', doneMsg);
+        await _sendMessage(chatId, doneMsg);
       } else {
         // It's a plain text response
         onUiMessage?.call('assistant', '💬 $aiResponse');
@@ -334,24 +325,41 @@ class TelegramService {
       onUiMessage?.call('assistant', errMsg);
       await _sendMessage(chatId, errMsg);
     } finally {
+      if (wasLockedInitially) {
+        try {
+          await screenService.pressHome();
+          await Future.delayed(const Duration(milliseconds: 500));
+        } catch (_) {}
+      }
       await screenService.setKeepScreenOn(false);
+      await screenService.stopExecutionMode(returnToListener: true);
+      if (wasLockedInitially) {
+        try {
+          await Future.delayed(const Duration(milliseconds: 300));
+          await screenService.lockScreen();
+        } catch (_) {}
+      }
+      await screenService.setShowWhenLocked(true);
     }
   }
 
   Future<void> _sendMessage(String chatId, String text) async {
     if (_botToken.isEmpty) return;
+    final client = http.Client();
     try {
       final url = Uri.parse('https://api.telegram.org/bot$_botToken/sendMessage');
-      await http.post(
+      await client.post(
         url,
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'chat_id': chatId,
           'text': text,
         }),
-      );
+      ).timeout(const Duration(seconds: 15));
     } catch (e) {
       print('Failed to send telegram message: $e');
+    } finally {
+      client.close();
     }
   }
 

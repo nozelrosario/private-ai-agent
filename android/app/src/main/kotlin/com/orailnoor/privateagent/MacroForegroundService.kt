@@ -24,6 +24,7 @@ class MacroForegroundService : Service() {
     companion object {
         private const val TAG = "MacroForegroundService"
         const val CHANNEL_ID = "privateagent_routine_fgs_channel"
+        const val EXECUTION_CHANNEL_ID = "privateagent_execution_channel"
         const val NOTIFICATION_ID = 2001
 
         const val ACTION_START_LISTENER = "START_LISTENER"
@@ -453,10 +454,17 @@ class MacroForegroundService : Service() {
             return
         }
 
-        // Wake screen briefly so MainActivity can foreground over keyguard
-        wakeScreenTemporarily(this, 6000L)
+        // Immediately transition into high-priority Execution Mode so screen, CPU, and Wi-Fi stay
+        // awake across lockscreen transitions and Android 10-16 honors full-screen wakeups.
+        isRunning = true
+        isExecutingRoutine = true
+        acquireLocks()
+        acquireScreenBrightLock()
+        val preview = if (text.length > 40) "${text.take(40)}..." else text
+        val execNotification = buildExecutionNotification("Telegram: $preview")
+        startForeground(NOTIFICATION_ID, execNotification)
 
-        // Dispatch via race-free queue/channel bridge (avoids dropped cold starts and warm duplicates)
+        // Dispatch via persistent queue/channel bridge with ACK guarantee
         val msgId = if (updateId > 0) "${updateId}_${chatId}" else "${System.currentTimeMillis()}_${chatId}"
         MainActivity.dispatchTelegramMessage(this, chatId, text, msgId)
     }
@@ -541,13 +549,14 @@ class MacroForegroundService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE else PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, EXECUTION_CHANNEL_ID)
             .setContentTitle("PrivateAgent Loop Active")
             .setContentText(routineTitle)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPendingIntent)
             .setFullScreenIntent(openPendingIntent, true)
             .addAction(android.R.drawable.ic_media_pause, "Emergency Stop", stopPendingIntent)
@@ -556,7 +565,7 @@ class MacroForegroundService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val listenerChannel = NotificationChannel(
                 CHANNEL_ID,
                 "PrivateAgent Background Service",
                 NotificationManager.IMPORTANCE_LOW
@@ -564,8 +573,23 @@ class MacroForegroundService : Service() {
                 description = "Keeps PrivateAgent active in the background for Telegram remote control and autonomous routines."
                 setShowBadge(false)
             }
+
+            // Dedicated HIGH-importance channel required on Android 8-16 for setFullScreenIntent wakeups
+            val executionChannel = NotificationChannel(
+                EXECUTION_CHANNEL_ID,
+                "PrivateAgent Task Wakeup & Execution",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Wakes the screen over the lockscreen when an autonomous routine or remote Telegram task starts."
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(true)
+            }
+
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            manager?.createNotificationChannel(channel)
+            manager?.createNotificationChannel(listenerChannel)
+            manager?.createNotificationChannel(executionChannel)
         }
     }
 }

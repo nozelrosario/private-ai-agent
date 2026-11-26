@@ -157,6 +157,8 @@ Rules:
       await _screenService.dismissKeyguard();
       await Future.delayed(const Duration(milliseconds: 400));
       if (await _screenService.isKeyguardLocked()) {
+        await _screenService.setShowWhenLocked(false);
+        await Future.delayed(const Duration(milliseconds: 400));
         await _screenService.swipe(540, 1800, 540, 400);
         await Future.delayed(const Duration(milliseconds: 600));
       }
@@ -1065,7 +1067,9 @@ Has the success criteria been completely met?
       await _screenService.dismissKeyguard();
       await Future.delayed(const Duration(milliseconds: 500));
       if (await _screenService.isKeyguardLocked()) {
-        // Dispatch swipe up to clear standard swipe lockscreen or reveal credential input
+        // Temporarily uncover system lockscreen underneath MainActivity so swipe/PIN reaches OS lockscreen
+        await _screenService.setShowWhenLocked(false);
+        await Future.delayed(const Duration(milliseconds: 400));
         await _screenService.swipe(540, 1800, 540, 400);
         await Future.delayed(const Duration(milliseconds: 1000));
       }
@@ -1090,6 +1094,7 @@ Has the success criteria been completely met?
       await Future.delayed(const Duration(milliseconds: 1500));
       final stillLocked = await _screenService.isKeyguardLocked();
       if (stillLocked) {
+        await _screenService.setShowWhenLocked(true);
         final msg =
             'Failed: Screen remained locked after unlock skill execution.';
         _report(msg);
