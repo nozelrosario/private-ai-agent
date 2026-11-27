@@ -54,16 +54,23 @@ jobs:
             IS_PRERELEASE="true"
           fi
 
-          # 2. Extract base version from pubspec.yaml
-          BASE_VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d ' ')
+          # 2. Extract base version and build number from pubspec.yaml
+          RAW_VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | tr -d '[:space:]')
+          BASE_VERSION=$(echo "$RAW_VERSION" | cut -d'+' -f1)
+          BASE_BUILD_NUMBER=$(echo "$RAW_VERSION" | cut -s -d'+' -f2 | tr -dc '0-9')
+          BASE_BUILD_NUMBER=${BASE_BUILD_NUMBER:-1}
 
           if [ "$CHANNEL" = "beta" ]; then
             FLAVOR="beta"
             ARTIFACT_NAME="private-agent-android-beta"
             if [[ "${{ github.ref }}" =~ ^refs/tags/ ]]; then
               RELEASE_TAG="${{ github.ref_name }}"
+              BUILD_NAME="${RELEASE_TAG#v}"
+              BUILD_NUMBER="$BASE_BUILD_NUMBER"
             else
               RELEASE_TAG="v${BASE_VERSION}-beta.${{ github.run_number }}"
+              BUILD_NAME="${BASE_VERSION}-beta.${{ github.run_number }}"
+              BUILD_NUMBER=$((BASE_BUILD_NUMBER + GITHUB_RUN_NUMBER))
             fi
             RELEASE_TITLE="PrivateAgent Beta (${RELEASE_TAG})"
           else
@@ -74,6 +81,8 @@ jobs:
             else
               RELEASE_TAG="v${BASE_VERSION}"
             fi
+            BUILD_NAME="$BASE_VERSION"
+            BUILD_NUMBER="$BASE_BUILD_NUMBER"
             RELEASE_TITLE="PrivateAgent Stable (${RELEASE_TAG})"
           fi
 
@@ -83,8 +92,10 @@ jobs:
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+          echo "build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
 
-          echo "::notice ::Building Channel: $CHANNEL (Flavor: $FLAVOR, Tag: $RELEASE_TAG, Prerelease: $IS_PRERELEASE)"
+          echo "::notice ::Building Channel: $CHANNEL (Flavor: $FLAVOR, Tag: $RELEASE_TAG, Version: ${BUILD_NAME}+${BUILD_NUMBER}, Prerelease: $IS_PRERELEASE)"
 
       - uses: actions/setup-java@v4
         with:
@@ -102,10 +113,38 @@ jobs:
       - name: Run tests
         run: flutter test
 
+      - name: Decode Android release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          for var in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!var}" ]; then
+              echo "::error ::Missing required signing secret: $var"
+              exit 1
+            fi
+          done
+          KEYSTORE_FILE="${{ runner.temp }}/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KEYSTORE_FILE"
+          chmod 600 "$KEYSTORE_FILE"
+          if [ ! -s "$KEYSTORE_FILE" ]; then
+            echo "::error ::Decoded keystore file is empty."
+            exit 1
+          fi
+          echo "KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+
       - name: Build universal APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           FLAVOR="${{ steps.channel_info.outputs.flavor }}"
-          flutter build apk --flavor "$FLAVOR" --release --verbose --android-skip-build-dependency-validation
+          BUILD_NAME="${{ steps.channel_info.outputs.build_name }}"
+          BUILD_NUMBER="${{ steps.channel_info.outputs.build_number }}"
+          flutter build apk --flavor "$FLAVOR" --release --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --verbose --android-skip-build-dependency-validation
           mkdir -p dist
           # Copy universal apk
           find build/app/outputs/flutter-apk/ -maxdepth 1 -name "*release.apk" ! -name "*arm*" ! -name "*x86*" -exec cp {} "dist/app-${FLAVOR}-universal-release.apk" \;
@@ -114,15 +153,56 @@ jobs:
           fi
 
       - name: Build architecture-specific APKs
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           FLAVOR="${{ steps.channel_info.outputs.flavor }}"
-          flutter build apk --flavor "$FLAVOR" --release --split-per-abi --verbose --android-skip-build-dependency-validation
+          BUILD_NAME="${{ steps.channel_info.outputs.build_name }}"
+          BUILD_NUMBER="${{ steps.channel_info.outputs.build_number }}"
+          flutter build apk --flavor "$FLAVOR" --release --split-per-abi --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --verbose --android-skip-build-dependency-validation
           for abi in arm64-v8a armeabi-v7a x86_64; do
             find build/app/outputs/flutter-apk/ -name "*${abi}*release.apk" -exec cp {} "dist/app-${FLAVOR}-${abi}-release.apk" \;
           done
           cd dist
           sha256sum *.apk > SHA256SUMS.txt
           ls -la
+
+      - name: Verify APK signatures
+        run: |
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER=$(find "$SDK_DIR/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error ::Could not locate apksigner in $SDK_DIR/build-tools."
+            exit 1
+          fi
+          EXPECTED_DIGEST=""
+          for apk in dist/*.apk; do
+            echo "=== Verifying $apk ==="
+            CERT_INFO=$("$APKSIGNER" verify --print-certs "$apk")
+            echo "$CERT_INFO"
+            if echo "$CERT_INFO" | grep -q "CN=Android Debug"; then
+              echo "::error ::$apk is signed with an ephemeral debug certificate!"
+              exit 1
+            fi
+            DIGEST=$(echo "$CERT_INFO" | grep -m1 "certificate SHA-256 digest:" | awk '{print $NF}')
+            if [ -z "$DIGEST" ]; then
+              echo "::error ::Failed to extract certificate SHA-256 digest for $apk"
+              exit 1
+            fi
+            if [ -z "$EXPECTED_DIGEST" ]; then
+              EXPECTED_DIGEST="$DIGEST"
+            elif [ "$DIGEST" != "$EXPECTED_DIGEST" ]; then
+              echo "::error ::Certificate mismatch on $apk ($DIGEST != $EXPECTED_DIGEST)"
+              exit 1
+            fi
+          done
+          echo "::notice ::All APKs verified with consistent release signing cert SHA-256: $EXPECTED_DIGEST"
+
+      - name: Cleanup release keystore
+        if: always()
+        run: rm -f "${{ runner.temp }}/release.jks"
 
       - uses: actions/upload-artifact@v4
         with:

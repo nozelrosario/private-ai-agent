@@ -171,24 +171,19 @@ jobs:
 
 ---
 
-## 5. APK Signing Considerations
+## 5. APK Signing & In-Place Upgrades
 
-### Default Sideload Signing (Current Setup)
-In `android/app/build.gradle.kts`:
-```kotlin
-buildTypes {
-    release {
-        signingConfig = signingConfigs.getByName("debug")
-    }
-}
-```
-- **How it works**: The release build uses the standard Android debug keystore.
-- **Benefits**: Builds out-of-the-box on GitHub Actions with zero keystores or secret configuration required. Anyone can download and install the APK via Android sideloading.
-- **Drawbacks**: If users update from an APK built on a different machine or keystore, Android will show an "App not installed as package conflicts with an existing package" signature mismatch error.
+### Persistent Release Keystore Signing (Current Setup)
+In `android/app/build.gradle.kts`, release builds resolve signing credentials in the following order:
+1. **CI environment variables**: `KEYSTORE_PATH`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD` (decoded from GitHub Actions secrets in `.github/workflows/android-release.yml`).
+2. **Local developer keystore**: `android/key.properties` (gitignored alongside `**/*.jks` / `**/*.keystore` via `android/.gitignore`).
+3. **Local-only debug fallback**: Outside CI (`CI != "true"`), if neither environment variables nor `android/key.properties` exist, release builds fall back to `signingConfigs.getByName("debug")` so local `flutter run --release` continues to work. In CI (`CI == "true"`), missing signing credentials fail the build immediately.
 
-### (Optional) Official Custom Keystore Signing
-If you wish to sign your APKs with a permanent private keystore:
-1. Generate an Android release keystore:
+> [!IMPORTANT]
+> GitHub Actions `ubuntu-latest` runners are ephemeral and do not preserve `~/.android/debug.keystore`. Signing release APKs with `debug` keys in CI generates a brand-new random certificate on every run, causing Android to reject updates with *"App not installed as package conflicts with an existing package"* (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+
+### Configuring Repository Secrets for Forks / New Environments
+1. Generate a persistent Android release keystore (keep an encrypted offline backup; losing it prevents future in-place upgrades):
    ```bash
    keytool -genkey -v -keystore release.jks -alias privateagent -keyalg RSA -keysize 2048 -validity 10000
    ```
@@ -201,4 +196,14 @@ If you wish to sign your APKs with a permanent private keystore:
    - `KEYSTORE_PASSWORD`: keystore password
    - `KEY_ALIAS`: `privateagent`
    - `KEY_PASSWORD`: alias password
-4. Update `build.gradle.kts` and the workflow to decode the keystore before running `flutter build`.
+4. Optional local signing: place `release.jks` under `android/` and create `android/key.properties`:
+   ```properties
+   storePassword=<KEYSTORE_PASSWORD>
+   keyPassword=<KEY_PASSWORD>
+   keyAlias=privateagent
+   storeFile=release.jks
+   ```
+
+### Upgrade Notes for End Users
+- **Migrating from legacy debug-signed builds:** Any installation built before persistent release signing was enabled must be uninstalled **once** before installing the newly signed APK. All subsequent updates within the same channel (`stable` or `beta`) will install and overwrite in-place.
+- **Keep the same APK variant when updating:** Flutter `--split-per-abi` adds ABI offsets (`+1000` for `armeabi-v7a`, `+2000` for `arm64-v8a`, `+3000` for `x86_64`), whereas `universal` APKs use the un-offset `versionCode`. Updating from a split-ABI APK (e.g., `arm64-v8a`) to a `universal` APK can trigger a `versionCode` downgrade error; stick to the same variant (`universal` -> `universal` or `arm64-v8a` -> `arm64-v8a`).
