@@ -75,6 +75,11 @@ APKs, most modern Android phones—including Snapdragon devices—must use
 PrivateAgent supports Android 8.0 (API 26) and newer. Current release builds are
 also checked for Android 15/16's 16 KB native-library alignment requirement.
 
+> **Updating an existing install:** Keep using the same APK variant (`universal` or
+> `arm64-v8a`) when upgrading to avoid `versionCode` conflicts. If upgrading from a
+> legacy build published before persistent release signing was introduced, uninstall
+> the old build once first; all future releases will update in-place.
+
 ## Knowledge Base & Documentation
 
 For comprehensive technical documentation, architectural diagrams, file breakdown, and release setup guides:
